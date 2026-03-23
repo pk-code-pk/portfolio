@@ -7,10 +7,16 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=Hanken+Grotesk:wght@300;400;500;600;700;800;900&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&family=Hanken+Grotesk:wght@600;700;800&family=Noto+Sans+JP:wght@700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/splitting/dist/splitting.css">
 
   <style>
+    @property --marquee-bg {
+      syntax: '<color>';
+      initial-value: #0064ff;
+      inherits: false;
+    }
+
     @property --glow-col {
       syntax: '<color>';
       initial-value: rgba(0, 120, 255, 0.7);
@@ -302,8 +308,6 @@
       max-width: 20ch;
       text-transform: lowercase;
       color: #fff;
-      filter: drop-shadow(0 0 16px var(--glow-col)) drop-shadow(0 0 48px var(--glow-col));
-      animation: glow-color-shift 6s ease-in-out infinite;
       /* animation: aura-pulse 7s ease-in-out infinite; */
       /* text-shadow:
         -2px 0 0 rgba(0, 80, 220, 0.45),
@@ -346,6 +350,31 @@
           0 0 80px rgba(0, 80, 255, 0.25),
           0 0 140px rgba(0, 60, 220, 0.12);
       }
+    }
+
+    .hero-title::before, .hero-title::after,
+    .contact-big::before, .contact-big::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 4px;
+      pointer-events: none;
+      z-index: -1;
+      will-change: opacity;
+      filter: blur(38px);
+      opacity: 0;
+    }
+    .hero-title::before, .contact-big::before {
+      background: rgba(0, 100, 255, 0.85);
+      animation: glow-a 6s ease-in-out infinite 0s;
+    }
+    .hero-title::after, .contact-big::after {
+      background: rgba(0, 210, 255, 0.75);
+      animation: glow-a 6s ease-in-out infinite 3s;
+    }
+    @keyframes glow-a {
+      0%, 100% { opacity: 0; }
+      50%       { opacity: 1; }
     }
 
     @keyframes glow-color-shift {
@@ -526,17 +555,17 @@
     /* ─── marquee ─── */
     .marquee-strip {
       overflow: hidden;
-      background: #0064ff;
+      background: var(--marquee-bg);
       padding: 14px 0;
       display: flex;
       animation: marquee-bg 6s ease-in-out infinite;
     }
 
     @keyframes marquee-bg {
-      0%   { background: #0064ff; }
-      33%  { background: #00d2ff; }
-      66%  { background: #0032c8; }
-      100% { background: #0064ff; }
+      0%   { --marquee-bg: #0064ff; }
+      33%  { --marquee-bg: #00d2ff; }
+      66%  { --marquee-bg: #0032c8; }
+      100% { --marquee-bg: #0064ff; }
     }
 
     .marquee-track {
@@ -635,8 +664,7 @@
       line-height: .95;
       text-transform: lowercase;
       margin: clamp(32px, 4vw, 56px) 0 clamp(48px, 6vw, 80px);
-      filter: drop-shadow(0 0 16px var(--glow-col)) drop-shadow(0 0 48px var(--glow-col));
-      animation: glow-color-shift 6s ease-in-out infinite;
+      position: relative;
     }
 
     .contact-grid {
