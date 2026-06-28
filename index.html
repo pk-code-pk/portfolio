@@ -400,19 +400,19 @@
 
     /* ─── section basics ─── */
     .section-label {
-      font-size: .68rem;
+      font-size: .98rem;
       font-weight: 500;
       letter-spacing: .01em;
       text-transform: lowercase;
-      color: var(--muted);
+      color: #bbb;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 10px;
     }
     .section-label::before {
       content: '';
       display: inline-block;
-      width: 18px;
+      width: 28px;
       height: 1px;
       background: rgba(0, 80, 220, 0.6);
     }
@@ -496,6 +496,61 @@
       transition: color .4s ease;
     }
 
+    /* type tag — internship / project / club (shared blue glow) */
+    .work-type {
+      font-size: .56rem;
+      font-weight: 500;
+      letter-spacing: .18em;
+      text-transform: lowercase;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-blue);
+      text-shadow:
+        0 0 6px rgba(0, 140, 255, 0.55),
+        0 0 14px rgba(0, 100, 255, 0.30);
+      animation: text-blue-shift 6s ease-in-out infinite;
+      margin-bottom: 4px;
+      transition: color .4s ease, text-shadow .4s ease;
+      white-space: nowrap;
+    }
+
+    /* on hover, kill the glow so it doesn't fight the wipe-in overlay */
+    .work-item:hover .work-type {
+      text-shadow: none;
+      animation: none;
+    }
+
+    /* ─── work group partition (sub-header inside the work list) ─── */
+    .work-group {
+      border-top: 1px solid var(--border);
+      padding: clamp(28px, 3.5vw, 40px) var(--pad) clamp(12px, 1.6vw, 18px);
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      position: relative;
+    }
+
+    .work-group-label {
+      font-size: .98rem;
+      font-weight: 500;
+      letter-spacing: .01em;
+      text-transform: lowercase;
+      color: #bbb;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .work-group-label::before {
+      content: '';
+      display: inline-block;
+      width: 28px;
+      height: 1px;
+      background: rgba(0, 80, 220, 0.6);
+    }
+
+    /* avoid double border line right after the partition */
+    .work-group + .work-item { border-top: none; }
+
     /* hover overlay */
     .work-overlay {
       position: absolute; inset: 0;
@@ -512,7 +567,8 @@
     .work-item:hover .work-num,
     .work-item:hover .work-name,
     .work-item:hover .work-year,
-    .work-item:hover .work-cats { color: #000; }
+    .work-item:hover .work-cats,
+    .work-item:hover .work-type { color: #000; }
 
     /* colored rows: left accent bar at rest, white text on hover */
     .work-item[style] {
@@ -521,7 +577,8 @@
     .work-item[style]:hover .work-num,
     .work-item[style]:hover .work-name,
     .work-item[style]:hover .work-year,
-    .work-item[style]:hover .work-cats { color: #fff; }
+    .work-item[style]:hover .work-cats,
+    .work-item[style]:hover .work-type { color: #fff; }
 
     /* ─── marquee ─── */
     .marquee-strip {
@@ -607,12 +664,12 @@
     .about-row:last-child { border-bottom: 1px solid var(--border); }
 
     .about-row-key {
-      font-size: .62rem;
+      font-size: .88rem;
       font-weight: 500;
       letter-spacing: .01em;
       text-transform: lowercase;
-      color: var(--muted);
-      min-width: 90px;
+      color: #bbb;
+      min-width: 120px;
     }
 
     .about-row-val {
@@ -646,12 +703,12 @@
     }
 
     .contact-col-label {
-      font-size: .62rem;
+      font-size: .88rem;
       font-weight: 500;
       letter-spacing: .01em;
       text-transform: lowercase;
-      color: var(--muted);
-      margin-bottom: 10px;
+      color: #bbb;
+      margin-bottom: 12px;
     }
 
     .contact-col a {
@@ -701,6 +758,541 @@
       will-change: transform, opacity;
     }
 
+    /* ─── case-study page (per work item) ─── */
+    /* page emerges from inside the bursting ascii title — it's not the
+       slider anymore. gsap controls opacity + scale during the burst. */
+    .case-study {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: var(--bg);
+      overflow-y: auto;
+      overflow-x: hidden;
+      visibility: hidden;
+      opacity: 0;
+      will-change: transform, opacity;
+      /* kill the rubber-band overscroll on the case-study itself AND block
+         the scroll-chain from propagating to the document. without this, a
+         rapid trackpad swipe past top/bottom briefly pulls the parent and
+         the home page bleeds through underneath. */
+      overscroll-behavior: none;
+      /* paint into our own compositing layer so a fast-path scroll update on
+         this transformed scroll container can never expose a sub-pixel seam
+         to whatever is sitting beneath it. */
+      isolation: isolate;
+    }
+
+    .case-study.is-open {
+      visibility: visible;
+    }
+
+    .case-back {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      width: 100%;
+      padding: 22px var(--pad);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: linear-gradient(to bottom, rgba(8,8,8,0.96) 0%, rgba(8,8,8,0.55) 70%, transparent 100%);
+      color: var(--fg);
+      font-family: 'Hanken Grotesk', sans-serif;
+      font-size: .78rem;
+      font-weight: 500;
+      letter-spacing: .22em;
+      text-transform: uppercase;
+      border: none;
+      cursor: none;
+      text-align: left;
+    }
+
+    .case-back-glyph {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: .95rem;
+      display: inline-block;
+      transition: transform .3s cubic-bezier(.23,1,.32,1);
+    }
+
+    .case-back:hover .case-back-glyph {
+      transform: translate(-4px, 4px);
+    }
+
+    .case-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.1fr;
+      gap: clamp(40px, 6vw, 100px);
+      padding: clamp(24px, 4vw, 60px) var(--pad) clamp(80px, 10vw, 140px);
+      align-items: start;
+    }
+
+    .case-eyebrow {
+      font-size: .68rem;
+      font-weight: 500;
+      letter-spacing: .26em;
+      text-transform: lowercase;
+      font-variant-numeric: tabular-nums;
+      color: var(--case-accent-light, #B6D4F5);
+      text-shadow:
+        0 0 6px var(--case-accent-glow, rgba(0, 140, 255, 0.55)),
+        0 0 16px var(--case-accent-faded, rgba(0, 100, 255, 0.32));
+      margin-bottom: 28px;
+      white-space: nowrap;
+    }
+
+    .case-title {
+      font-family: 'Hanken Grotesk', sans-serif;
+      font-size: clamp(2.6rem, 7vw, 6.4rem);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 0.95;
+      text-transform: lowercase;
+      color: #fff;
+      filter:
+        drop-shadow(0 0 16px var(--case-accent, rgba(0,120,255,0.7)))
+        drop-shadow(0 0 48px var(--case-accent, rgba(0,120,255,0.45)));
+      display: flex;
+      align-items: baseline;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+
+    .case-title .case-title-text { display: inline-block; }
+    .case-title .case-title-text .char {
+      display: inline-block;
+      opacity: 0;
+      will-change: transform, opacity;
+      color: inherit;
+    }
+
+    .case-title-year {
+      font-size: .26em;
+      font-weight: 500;
+      letter-spacing: .02em;
+      color: rgba(255,255,255,0.55);
+      filter: none;
+      align-self: flex-start;
+      margin-top: 0.4em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* punchy hook beneath the title — the one-liner that sells the case */
+    .case-lede {
+      margin: clamp(28px, 3.5vw, 40px) 0 0;
+      font-family: 'Hanken Grotesk', sans-serif;
+      font-size: clamp(1.08rem, 1.55vw, 1.32rem);
+      font-weight: 600;
+      line-height: 1.4;
+      color: var(--fg);
+      max-width: 56ch;
+      letter-spacing: -.012em;
+    }
+
+    /* multi-paragraph body — the longer narrative */
+    .case-body {
+      margin-top: clamp(22px, 2.6vw, 32px);
+      display: flex;
+      flex-direction: column;
+      gap: clamp(14px, 1.8vw, 22px);
+      max-width: 60ch;
+    }
+
+    .case-body p {
+      margin: 0;
+      font-family: 'Hanken Grotesk', sans-serif;
+      font-size: clamp(.95rem, 1.22vw, 1.05rem);
+      line-height: 1.72;
+      color: rgba(255,255,255,0.74);
+      letter-spacing: -.002em;
+    }
+
+    .case-body a {
+      color: var(--case-accent-light, #B6D4F5);
+      text-decoration: none;
+      border-bottom: 1px solid var(--case-accent-faded, rgba(0, 140, 255, 0.32));
+      transition: color .25s, border-color .25s;
+    }
+    .case-body a:hover {
+      color: #fff;
+      border-bottom-color: var(--case-accent-glow, rgba(0, 140, 255, 0.55));
+    }
+
+    /* footnote-y disclaimer beneath the body. used for things like NDAs or
+       caveats that shouldn't break the prose flow. set via `note: '...'` on
+       a work entry. styled in mono to read as a system-level annotation. */
+    .case-note {
+      margin: clamp(20px, 2.4vw, 28px) 0 0;
+      padding-top: clamp(14px, 1.6vw, 20px);
+      border-top: 1px solid var(--border);
+      font-family: ui-monospace, 'SF Mono', 'Menlo', 'JetBrains Mono', monospace;
+      font-size: .72rem;
+      letter-spacing: .03em;
+      line-height: 1.7;
+      color: rgba(255,255,255,0.46);
+      max-width: 60ch;
+    }
+    .case-note:empty { display: none; }
+    .case-note::before {
+      content: '※ ';
+      color: var(--case-accent-light, rgba(180, 210, 255, 0.6));
+      letter-spacing: 0;
+    }
+
+    /* right-column visual slot. holds either the ascii hero panel (for cases
+       without images) or the image collage (for cases that have them). when
+       case-media has children, the ascii panel is hidden via :has(). */
+    .case-visual {
+      position: relative;
+      min-width: 0;
+    }
+    .case-visual:has(.case-media:not(:empty)) .case-hero {
+      display: none;
+    }
+
+    /* media gallery. each entry in a work's `images: []` array is either a
+       string path or { src, alt, caption, layout }. layout maps to a span
+       class on the figure, so the same component can do hero+aside pairs,
+       half/half rows, tall portraits next to wide screenshots, etc.
+       items with no layout flag default to full width. */
+    .case-media {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: clamp(10px, 1.3vw, 18px);
+      align-items: start;
+      width: 100%;
+    }
+    .case-media:empty { display: none; }
+
+    .case-media figure {
+      grid-column: span 12;
+      margin: 0;
+      position: relative;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      background: #050505;
+      box-shadow: 0 18px 40px var(--case-accent-halo, rgba(0, 60, 200, 0.10));
+      transition: transform .35s ease, box-shadow .35s ease;
+    }
+    .case-media figure:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 22px 50px var(--case-accent-glow, rgba(0, 60, 200, 0.20));
+    }
+
+    /* layout variants. names match `layout` strings on image objects.
+       widths are tuned so common pairings (hero+mobile, tall+wide, half+half)
+       sum to 12. images keep their natural aspect ratio so the layout reads
+       like a curated board — a tall iphone shot rising over a wide desktop
+       hero, a portrait panel next to a near-square map screenshot. */
+    .case-media figure.is-hero   { grid-column: span 9; }
+    .case-media figure.is-mobile { grid-column: span 3; }
+    .case-media figure.is-tall   { grid-column: span 5; }
+    .case-media figure.is-wide   { grid-column: span 7; }
+    .case-media figure.is-half   { grid-column: span 6; }
+    .case-media figure.is-third  { grid-column: span 4; }
+    .case-media figure.is-banner { grid-column: span 8; }
+    .case-media figure.is-aside  { grid-column: span 8; margin-left: auto; }
+    .case-media figure.is-pin    { grid-column: span 5; margin-left: auto; }
+
+    /* collapse to single column on narrower viewports so nothing gets crushed. */
+    @media (max-width: 920px) {
+      .case-media figure,
+      .case-media figure.is-hero,
+      .case-media figure.is-mobile,
+      .case-media figure.is-tall,
+      .case-media figure.is-wide,
+      .case-media figure.is-half,
+      .case-media figure.is-third,
+      .case-media figure.is-banner,
+      .case-media figure.is-aside,
+      .case-media figure.is-pin {
+        grid-column: span 12;
+        margin-left: 0;
+      }
+    }
+
+    .case-media img {
+      display: block;
+      width: 100%;
+      height: auto;
+      filter: saturate(.92) contrast(1.02);
+    }
+
+
+    .case-media figcaption {
+      position: absolute;
+      bottom: 10px;
+      left: 12px;
+      right: 12px;
+      font-family: ui-monospace, 'SF Mono', 'Menlo', monospace;
+      font-size: .62rem;
+      letter-spacing: .24em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.68);
+      text-shadow: 0 1px 6px rgba(0,0,0,0.85);
+      pointer-events: none;
+    }
+
+    .case-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: clamp(28px, 3.5vw, 40px);
+    }
+
+    .case-tag {
+      border: 1px solid rgba(255,255,255,0.18);
+      padding: 7px 14px;
+      border-radius: 999px;
+      font-size: .64rem;
+      font-weight: 500;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      color: #cfcfcf;
+      background: rgba(255,255,255,0.02);
+      transition: color .3s, border-color .3s, background .3s, box-shadow .3s;
+      cursor: none;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .case-tag:hover {
+      color: #fff;
+      border-color: var(--case-accent, rgba(0,180,255,0.8));
+      background: rgba(255,255,255,0.05);
+      box-shadow: 0 0 18px rgba(0, 130, 255, 0.18);
+    }
+
+    .case-meta {
+      margin-top: clamp(40px, 5vw, 64px);
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 18px 32px;
+      max-width: 560px;
+    }
+
+    .case-meta-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      border-top: 1px solid var(--border);
+      padding-top: 14px;
+    }
+
+    .case-meta-key {
+      font-size: .62rem;
+      font-weight: 500;
+      letter-spacing: .22em;
+      text-transform: uppercase;
+      color: #888;
+    }
+
+    .case-meta-val {
+      font-size: .92rem;
+      color: var(--fg);
+      letter-spacing: -.005em;
+      line-height: 1.4;
+    }
+
+    /* hero panel — live ascii art + project label */
+    .case-hero {
+      position: relative;
+      border: 1px solid var(--border);
+      background:
+        radial-gradient(circle at 70% 30%, var(--case-accent-halo, rgba(0, 60, 220, 0.12)), transparent 60%),
+        #060606;
+      border-radius: 4px;
+      overflow: hidden;
+      aspect-ratio: 4 / 3;
+      box-shadow: 0 30px 80px var(--case-accent-halo, rgba(0, 60, 200, 0.16));
+      position: sticky;
+      top: 90px;
+    }
+
+    .case-ascii {
+      position: absolute;
+      inset: 0;
+      margin: 0;
+      padding: 18px 20px;
+      font-family: ui-monospace, 'SF Mono', 'Menlo', 'JetBrains Mono', monospace;
+      font-size: 10px;
+      line-height: 1.12;
+      letter-spacing: 0.5px;
+      color: var(--case-accent-faded, rgba(0, 180, 255, 0.4));
+      text-shadow: 0 0 4px var(--case-accent-faded, rgba(0, 140, 255, 0.22));
+      white-space: pre;
+      overflow: hidden;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    .case-hero::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(to bottom, transparent 60%, rgba(0,0,0,0.6) 100%),
+        radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.35) 100%);
+      pointer-events: none;
+    }
+
+    .case-hero-label {
+      position: absolute;
+      bottom: 22px;
+      left: 22px;
+      z-index: 2;
+      font-family: 'Hanken Grotesk', sans-serif;
+      font-size: clamp(1.3rem, 2.4vw, 2.2rem);
+      font-weight: 700;
+      letter-spacing: -.025em;
+      text-transform: lowercase;
+      color: #fff;
+      text-shadow: 0 0 14px var(--case-accent, rgba(0, 180, 255, 0.7));
+      padding: 8px 14px;
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .case-hero-corner {
+      position: absolute;
+      top: 18px;
+      right: 22px;
+      z-index: 2;
+      font-family: ui-monospace, monospace;
+      font-size: .56rem;
+      font-weight: 500;
+      letter-spacing: .26em;
+      text-transform: uppercase;
+      color: var(--case-accent-light, #B6D4F5);
+      text-shadow: 0 0 8px var(--case-accent-glow, rgba(0, 140, 255, 0.5));
+    }
+
+    /* ─── title burst (page transition) ─── */
+    /* the clicked row's title fills the screen in the site's own typography,
+       holds for a beat, then bursts (scale + blur + fade) as the case page
+       emerges through it. the title text IS the transition. */
+    .title-burst {
+      position: fixed;
+      inset: 0;
+      z-index: 9500;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 26px;
+      padding: 0 6vw;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      overflow: hidden;
+    }
+
+    .title-burst.is-active {
+      visibility: visible;
+    }
+
+    /* full-bleed ascii static layer — flashes through the overlay at the
+       exact moment of the burst. mix-blend-mode: screen lets the accent-tinted
+       glyphs glow over (not obscure) the title and corner frame. */
+    .title-burst-ascii {
+      position: absolute;
+      inset: 0;
+      margin: 0;
+      padding: 6vh 4vw;
+      font-family: ui-monospace, 'SF Mono', 'Menlo', monospace;
+      font-size: clamp(0.6rem, 0.85vw, 0.95rem);
+      line-height: 1.12;
+      letter-spacing: 0.4px;
+      color: var(--case-accent-light, #B6D4F5);
+      text-shadow: 0 0 8px var(--case-accent-glow, rgba(0, 160, 255, 0.45));
+      white-space: pre;
+      overflow: hidden;
+      pointer-events: none;
+      user-select: none;
+      opacity: 0;
+      mix-blend-mode: screen;
+      will-change: opacity;
+      z-index: 0;
+    }
+
+    /* title-burst flex children sit above the ascii layer */
+    .title-burst-eyebrow,
+    .title-burst-frame { position: relative; z-index: 1; }
+
+    .title-burst-eyebrow {
+      font-family: 'Hanken Grotesk', sans-serif;
+      font-size: clamp(.78rem, 1vw, .92rem);
+      font-weight: 500;
+      letter-spacing: .32em;
+      text-transform: lowercase;
+      color: var(--case-accent-light, #B6D4F5);
+      opacity: 0;
+      text-shadow: 0 0 14px var(--case-accent-glow, rgba(0, 160, 255, 0.4));
+    }
+
+    .title-burst-text {
+      font-family: 'Hanken Grotesk', sans-serif;
+      font-size: clamp(3.6rem, 11vw, 9.5rem);
+      font-weight: 800;
+      letter-spacing: -0.045em;
+      line-height: 0.95;
+      margin: 0;
+      text-align: center;
+      text-transform: lowercase;
+      color: var(--fg);
+      text-shadow:
+        0 0 28px var(--case-accent-glow, rgba(0, 160, 255, 0.35)),
+        0 0 80px var(--case-accent-faded, rgba(0, 160, 255, 0.18));
+      user-select: none;
+      transform-origin: center center;
+      will-change: transform, opacity, filter;
+    }
+
+    /* per-char wrappers — each glyph is animated individually on entry. */
+    .title-burst-text .char {
+      display: inline-block;
+      will-change: transform, opacity;
+    }
+
+    /* ── viewfinder frame around the title — 4 L-shaped corner brackets ── */
+    .title-burst-frame {
+      position: relative;
+      padding: clamp(28px, 4.5vw, 56px) clamp(36px, 6vw, 80px);
+    }
+
+    .title-burst-corner {
+      position: absolute;
+      width:  clamp(20px, 2.2vw, 34px);
+      height: clamp(20px, 2.2vw, 34px);
+      border-color: var(--case-accent-light, #B6D4F5);
+      border-style: solid;
+      border-width: 0;
+      pointer-events: none;
+      opacity: 0;
+      transform-origin: center center;
+      filter: drop-shadow(0 0 10px var(--case-accent-glow, rgba(0,160,255,0.45)));
+    }
+    .title-burst-corner--tl { top: 0;    left:  0; border-top-width:    1px; border-left-width:  1px; }
+    .title-burst-corner--tr { top: 0;    right: 0; border-top-width:    1px; border-right-width: 1px; }
+    .title-burst-corner--bl { bottom: 0; left:  0; border-bottom-width: 1px; border-left-width:  1px; }
+    .title-burst-corner--br { bottom: 0; right: 0; border-bottom-width: 1px; border-right-width: 1px; }
+
+    /* lock body when case is open. overscroll-behavior: none here is a
+       second line of defense — even if a UA somehow chains scroll to the
+       document, the document itself won't rubber-band and expose the home
+       page that's still painted (clipped, not unmounted) underneath. */
+    html.case-open, html.case-open body {
+      overflow: hidden;
+      overscroll-behavior: none;
+    }
+
+    @media (max-width: 880px) {
+      .case-grid { grid-template-columns: 1fr; }
+      .case-hero { position: relative; top: 0; aspect-ratio: 4 / 3; }
+    }
+
     @media (max-width: 640px) {
       .about { grid-template-columns: 1fr; }
       .work-item { grid-template-columns: auto 1fr; }
@@ -708,6 +1300,7 @@
       nav { mix-blend-mode: normal; color: var(--fg); background: var(--bg); }
       #cursor { display: none; }
       body { cursor: auto; }
+      .case-meta { grid-template-columns: 1fr 1fr; }
     }
   </style>
 </head>
@@ -785,48 +1378,57 @@
 <section class="work" id="work">
   <div class="work-head">
     <span class="section-label">Selected Work</span>
-    <span class="section-label" style="color:#bbb">(4)</span>
+    <span class="section-label">(4)</span>
   </div>
 
   <div class="work-list">
 
-    <div class="work-item js-work" style="--accent: #7C3AED">
+    <div class="work-item js-work" data-slug="janet-ai" style="--accent: #7C3AED">
       <div class="work-overlay"></div>
       <span class="work-num">01</span>
-      <span class="work-name">????</span>
+      <span class="work-name">janet.ai</span>
       <div class="work-meta">
+        <span class="work-type" data-type="internship">[ internship ]</span>
         <span class="work-year">2025</span>
         <span class="work-cats">ui design · dev</span>
       </div>
     </div>
 
-    <div class="work-item js-work" style="--accent: #DC143C">
+    <div class="work-item js-work" data-slug="tlc" style="--accent: #16803C">
       <div class="work-overlay"></div>
       <span class="work-num">02</span>
-      <span class="work-name">shuttl</span>
-      <div class="work-meta">
-        <span class="work-year">2025</span>
-        <span class="work-cats">branding · web</span>
-      </div>
-    </div>
-
-    <div class="work-item js-work" style="--accent: #16803C">
-      <div class="work-overlay"></div>
-      <span class="work-num">03</span>
       <span class="work-name">the learning company</span>
       <div class="work-meta">
-        <span class="work-year">2024</span>
-        <span class="work-cats">product</span>
+        <span class="work-type" data-type="internship">[ internship ]</span>
+        <span class="work-year">2025</span>
+        <span class="work-cats">ai · full-stack</span>
       </div>
     </div>
 
-    <div class="work-item js-work" style="--accent: #2164F3">
+    <div class="work-item js-work" data-slug="indeed" style="--accent: #2164F3">
       <div class="work-overlay"></div>
-      <span class="work-num">04</span>
+      <span class="work-num">03</span>
       <span class="work-name">indeed</span>
       <div class="work-meta">
-        <span class="work-year">2024</span>
-        <span class="work-cats">mobile · research</span>
+        <span class="work-type" data-type="internship">[ internship ]</span>
+        <span class="work-year">2025</span>
+        <span class="work-cats">ai · graph systems</span>
+      </div>
+    </div>
+
+    <div class="work-group" data-group="projects">
+      <span class="work-group-label">projects</span>
+      <span class="work-group-label">(1)</span>
+    </div>
+
+    <div class="work-item js-work" data-slug="shuttl" style="--accent: #DC143C">
+      <div class="work-overlay"></div>
+      <span class="work-num">04</span>
+      <span class="work-name">shuttl</span>
+      <div class="work-meta">
+        <span class="work-type" data-type="project">[ project ]</span>
+        <span class="work-year">2025</span>
+        <span class="work-cats">transit · routing</span>
       </div>
     </div>
 
@@ -897,6 +1499,54 @@
     <a href="#contact">Contact</a>
   </div>
 </footer>
+
+<!-- ── title burst transition ── -->
+<div class="title-burst" id="title-burst" aria-hidden="true">
+  <pre class="title-burst-ascii" id="title-burst-ascii" aria-hidden="true"></pre>
+  <span class="title-burst-eyebrow" id="title-burst-eyebrow"></span>
+  <div class="title-burst-frame" id="title-burst-frame">
+    <span class="title-burst-corner title-burst-corner--tl" aria-hidden="true"></span>
+    <span class="title-burst-corner title-burst-corner--tr" aria-hidden="true"></span>
+    <span class="title-burst-corner title-burst-corner--bl" aria-hidden="true"></span>
+    <span class="title-burst-corner title-burst-corner--br" aria-hidden="true"></span>
+    <h2 class="title-burst-text" id="title-burst-text"></h2>
+  </div>
+</div>
+
+<!-- ── case-study page (populated by JS) ── -->
+<!-- data-lenis-prevent: stops Lenis from hijacking the wheel event inside,
+     so the page's own overflow-y: auto can scroll natively. -->
+<section class="case-study" id="case-study" aria-hidden="true" data-lenis-prevent>
+  <button class="case-back" id="case-back" type="button" aria-label="Back to work list">
+    <span class="case-back-glyph" aria-hidden="true">↖</span>
+    <span class="case-back-text">back</span>
+  </button>
+
+  <div class="case-grid">
+    <div class="case-info">
+      <p class="case-eyebrow" id="case-eyebrow">[ ... ]</p>
+      <h1 class="case-title" id="case-title"></h1>
+      <p class="case-lede" id="case-lede"></p>
+      <div class="case-body" id="case-body"></div>
+      <p class="case-note" id="case-note"></p>
+      <div class="case-tags" id="case-tags"></div>
+      <div class="case-meta" id="case-meta"></div>
+    </div>
+
+    <!-- the right column is either the ascii hero panel OR an image collage,
+         depending on whether the work has an `images` array. CSS picks one
+         via :has(). -->
+    <div class="case-visual">
+      <aside class="case-hero">
+        <span class="case-hero-corner" id="case-hero-corner">SYS · 00</span>
+        <pre class="case-ascii" id="case-ascii"></pre>
+        <div class="case-hero-label" id="case-hero-label"></div>
+      </aside>
+      <div class="case-media" id="case-media"></div>
+    </div>
+  </div>
+</section>
+
 
 <!-- ── cursor ── -->
 <canvas id="cursor-canvas"></canvas>
@@ -974,7 +1624,7 @@
   }
 
   /* ─── scroll-triggered reveals ─── */
-  gsap.utils.toArray('.work-item').forEach(el => {
+  gsap.utils.toArray('.work-item, .work-group').forEach(el => {
     gsap.from(el, {
       scrollTrigger: { trigger: el, start: 'top 88%', toggleActions: 'play none none none' },
       opacity: 0, y: 18,
@@ -1026,9 +1676,15 @@
   const red   = { x: -200, y: -200 };
   const blue  = { x: -200, y: -200 };
   let isHover = false;
+  let ccActive = false;
+  let ccRAF;
   const PI2 = Math.PI * 2;
 
-  document.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+  document.addEventListener('mousemove', e => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+    if (!ccActive) { ccActive = true; drawCC(); }
+  });
   document.querySelectorAll('.work-item, .nav-links a, .contact-col a').forEach(el => {
     el.addEventListener('mouseenter', () => isHover = true);
     el.addEventListener('mouseleave', () => isHover = false);
@@ -1086,9 +1742,14 @@
     cctx.fillStyle = '#fff';
     cctx.fill();
 
-    requestAnimationFrame(drawCC);
+    const settled =
+      Math.hypot(main.x - mouse.x, main.y - mouse.y) < 0.2 &&
+      Math.hypot(red.x  - mouse.x, red.y  - mouse.y) < 0.2 &&
+      Math.hypot(blue.x - mouse.x, blue.y - mouse.y) < 0.2;
+
+    if (settled) { ccActive = false; return; }
+    ccRAF = requestAnimationFrame(drawCC);
   }
-  drawCC();
 
 
   /* ─── live clock (local time) ─── */
@@ -1112,6 +1773,472 @@
       if (target) lenis.scrollTo(target, { offset: -60 });
     });
   });
+
+  /* ─── case-study data ─── */
+  const WORKS = {
+    'janet-ai': {
+      title: 'janet.ai',
+      year: '2025',
+      type: 'internship',
+      accent: '#7C3AED',
+      lede: 'AI startup building agentic tooling for knowledge workers. I worked across the marketing site and product surface, designing flows, shipping UI in Next.js, and tightening the visual system as the product evolved.',
+      body: [],
+      // drop image paths here (strings or { src, alt, caption } objects)
+      // e.g. 'images/janet-1.png' or { src: 'images/janet-1.png', caption: 'home' }
+      images: [],
+      tags: ['Next.js', 'TypeScript', 'React', 'Tailwind', 'Framer Motion'],
+      meta: {
+        role: 'UI Design · Development',
+        timeline: 'Summer 2025',
+        team: 'Founding eng + design',
+        stack: 'Next.js · TS · Tailwind'
+      },
+      corner: 'JNT · 25'
+    },
+
+    'tlc': {
+      title: 'the learning company',
+      year: '2025',
+      type: 'internship',
+      accent: '#16803C',
+      lede: 'Solo-built. Sold for $10k. Stayed on as the engineering intern.',
+      body: [
+        "A tutoring company founder reached out wanting someone to build an adaptive SAT platform. I put together a team. They bailed. So I built the whole thing myself.",
+        "The core is the scoring engine. A custom IRT (Item Response Theory) implementation that adjusts question difficulty to each user. I read papers on IRT and chess rating before picking it over ML. At small user counts, ML overfits and picks up patterns that aren't real. IRT is accurate, controllable, and gets better as more users come in.",
+        "Next.js and TypeScript on the front. FastAPI microservices on Postgres through Supabase on the back, with SQLAlchemy, Clerk auth, and PostHog and Sentry for observability. A RAG pipeline parses raw inputs into JSON schemas and validates 3,000+ SAT-style questions. Live with 500+ concurrent testers at sub-100ms response times and 99.9% uptime.",
+        "Sold it for $10k. Stayed on as the engineering intern, owning the production MVP release, CI/CD, API standards, and 150+ code reviews. The client didn't know my team had bailed until after I delivered."
+      ],
+      images: [],
+      tags: ['Next.js', 'TypeScript', 'Tailwind', 'FastAPI', 'Python', 'Postgres', 'Supabase', 'SQLAlchemy', 'Clerk', 'PostHog', 'Sentry'],
+      meta: {
+        role: 'Software engineering intern',
+        timeline: 'Nov 2025 to present',
+        location: 'Atlanta, GA',
+        outcome: 'Sold for $10k'
+      },
+      corner: 'TLC · 25'
+    },
+
+    'indeed': {
+      title: 'indeed',
+      year: '2025',
+      type: 'internship',
+      accent: '#2164F3',
+      lede: 'Pitched my own project at Indeed Tokyo. Built it from zero, in a language I taught myself.',
+      body: [
+        "I pitched myself into this internship at a dinner. I was in HUJI, Harvard's Japan initiative, and Recruit came to campus for a recruiting event. When I realized they owned Indeed, I got their contact info that night and made my case.",
+        "When I got there, they didn't hand me a project. I was told to come up with one. So I spent my first weeks auditing every HR product Recruit and Indeed shipped, looking for gaps. The most interesting was Career Assistant, Indeed's tool for helping people figure out what to do next. It was useful, but it stopped at suggestions. I wanted to build the layer underneath. The how, not just the what.",
+        "So I built a career-planning system on top of that idea. A Python service layer on Neo4j processing 5M+ data points. 100,000+ resumes and job postings mapped into nodes and edges representing roles, skills, and transitions, with REST endpoints for low-latency path computation. React on the front. You input where you are and where you want to end up, and the system computes multi-step paths through the graph. OpenAI and Gemini plugged in with graph context injected into the prompts.",
+        "User research turned the product. I interviewed people across engineering, sales, law, and management. Nobody trusted pure AI. They wanted human connection. So I added human-in-the-loop checkpoints between milestones and shortened multi-week steps into one-week blocks with daily tasks. Trust up 40%. Engagement up 60%.",
+        "Presented my final entirely in Japanese. Someone told me they forgot it wasn't my native language."
+      ],
+      note: "The actual build is under NDA. The mockup shown is a stylized recreation of what I made. The other shots are public marketing material from the parent product family (Career Assistant, Indeed PLUS, and the American Career Navigator).",
+      images: [
+        { src: 'indeed/mockup.png',        alt: 'career navigator dashboard mockup', caption: 'mockup · my build'      },
+        { src: 'indeed/logo.png',          layout: 'third',  alt: 'career assistant logo',     caption: 'career assistant · logo' },
+        { src: 'indeed/plus-promo.png',    layout: 'banner', alt: 'indeed plus promo, jp',     caption: 'indeed plus · jp promo'  },
+        { src: 'indeed/navigator-us.png',  layout: 'half',   alt: 'career navigator, us',      caption: 'career navigator · us'   },
+        { src: 'indeed/assistant-app.png', layout: 'half',   alt: 'career assistant on phone', caption: 'career assistant · app'  }
+      ],
+      tags: ['Python', 'Neo4j', 'Cypher', 'React', 'OpenAI API', 'Gemini API', 'REST'],
+      meta: {
+        role: 'Software engineering intern',
+        timeline: 'July to Sept 2025',
+        team: 'Recruit · Indeed',
+        location: 'Tokyo, Japan'
+      },
+      corner: 'IND · 25'
+    },
+
+    'shuttl': {
+      title: 'shuttl',
+      year: '2025',
+      type: 'project',
+      accent: '#DC143C',
+      lede: "Harvard's shuttle app was broken. I built a better one over winter break. 1,000 people use it.",
+      body: [
+        "Everyone at Harvard hated PassioGo. It showed buses as colored lines overlapping on a map. You couldn't figure out how to get from where you were to where you needed to be, or how long it would take. I spent two weeks of winter break building door-to-door transit routing. Google Maps for campus shuttles.",
+        "FastAPI backend with a custom routing engine. Each transit system is modeled as a directed stop graph weighted by real-time conditions (live vehicle ETA, service status), not static distance. Bounded BFS finds every candidate path, then scores them: direct routes first, multi-leg transfers second, timetable fallbacks last. The annoying problem was reconciling two data sources. PassioGo's live API gives you vehicle coordinates but no route shapes. GTFS gives you route shapes but no real-time data. I built a mapping layer using name matching and spatial proximity, then injected GTFS polylines into live trip plans.",
+        'Redis caches vehicle positions on a 2-second TTL. P95 latency went from 30 seconds to under 5. 1,000+ active users. One of the heads of Harvard\'s CS department uses it. Live at <a href="https://shuttl.live" target="_blank" rel="noopener noreferrer">shuttl.live</a>.'
+      ],
+      images: [
+        { src: 'shuttlimages/desktop.png',  layout: 'hero',   alt: 'shuttl desktop, loaded in',    caption: 'desktop · loaded in' },
+        { src: 'shuttlimages/mobile.png',   layout: 'mobile', alt: 'shuttl mobile, trip planned',  caption: 'mobile · trip set'   },
+        { src: 'shuttlimages/selector.png', layout: 'tall',   alt: 'route selector panel',         caption: 'routes'              },
+        { src: 'shuttlimages/trip.png',     layout: 'wide',   alt: 'trip plan between two stops',  caption: 'point a to point b'  }
+      ],
+      tags: ['Python', 'FastAPI', 'Redis', 'React', 'TypeScript', 'Leaflet', 'Tailwind', 'Docker', 'GTFS', 'PassioGO API'],
+      meta: {
+        role: 'Solo developer',
+        timeline: 'Winter 2025',
+        stack: 'FastAPI · Redis · React · Leaflet',
+        users: '1,000+ active'
+      },
+      corner: 'SHT · 25'
+    }
+  };
+
+  /* ─── ascii generator + density-aware animator factory ─── */
+  const ASCII_LATIN    = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ#@&*+=-/<>?:;[]{}()░▒▓│║╗╝┐└╔╩╠═╬█▄▌▐▀';
+  const ASCII_KATAKANA = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ';
+
+  function pickAsciiChar() {
+    const pool = Math.random() < 0.22 ? ASCII_KATAKANA : ASCII_LATIN;
+    return pool.charAt(Math.floor(Math.random() * pool.length));
+  }
+
+  // density(c, r, cols, rows) → probability in [0, 1] that this cell shows a char.
+  // If no fn is given, falls back to a flat baseDensity.
+  function makeAsciiAnimator(el, opts = {}) {
+    const updateRate  = opts.updateRate  != null ? opts.updateRate  : 0.04;
+    const baseDensity = opts.baseDensity != null ? opts.baseDensity : 0.82;
+    const densityFn   = opts.densityFn   || null;
+    let raf = null;
+    let state = null;
+
+    function densityAt(c, r, cols, rows) {
+      return densityFn ? densityFn(c, r, cols, rows) : baseDensity;
+    }
+
+    function buildLines(rows, cols) {
+      const out = [];
+      for (let r = 0; r < rows; r++) {
+        let line = '';
+        for (let c = 0; c < cols; c++) {
+          line += Math.random() < densityAt(c, r, cols, rows) ? pickAsciiChar() : ' ';
+        }
+        out.push(line);
+      }
+      return out;
+    }
+
+    return {
+      start() {
+        this.stop();
+        const rect = el.getBoundingClientRect();
+        const cols = Math.max(40, Math.floor(rect.width  / 6.6));
+        const rows = Math.max(20, Math.floor(rect.height / 12.6));
+        state = { rows, cols, lines: buildLines(rows, cols) };
+        el.textContent = state.lines.join('\n');
+        let frame = 0;
+        const step = () => {
+          frame++;
+          const { rows, cols, lines } = state;
+          const updates = Math.floor(rows * cols * updateRate);
+          for (let i = 0; i < updates; i++) {
+            const r = Math.floor(Math.random() * rows);
+            const c = Math.floor(Math.random() * cols);
+            const d = densityAt(c, r, cols, rows);
+            const newChar = Math.random() < d ? pickAsciiChar() : ' ';
+            const line = lines[r];
+            lines[r] = line.substring(0, c) + newChar + line.substring(c + 1);
+          }
+          if (frame % 2 === 0) el.textContent = lines.join('\n');
+          raf = requestAnimationFrame(step);
+        };
+        step();
+      },
+      stop() {
+        if (raf) cancelAnimationFrame(raf);
+        raf = null;
+      }
+    };
+  }
+
+  // ─── page transition: the clicked row's title fills the screen in the
+  // site's own typography (chars stagger in), holds for a beat, then bursts
+  // (whole-element scale + blur + fade) as the case page emerges through it.
+  // open ≠ close — open is the moment, close is utility.
+
+  /* ─── color helpers: precompute lighter/faded accents in JS so we don't
+     depend on `color-mix()` in CSS (which silently falls back on some setups). */
+  function hexToRGB(hex) {
+    return {
+      r: parseInt(hex.slice(1, 3), 16),
+      g: parseInt(hex.slice(3, 5), 16),
+      b: parseInt(hex.slice(5, 7), 16)
+    };
+  }
+  function lightenHex(hex, amt) {
+    const { r, g, b } = hexToRGB(hex);
+    const lr = Math.round(r + (255 - r) * amt);
+    const lg = Math.round(g + (255 - g) * amt);
+    const lb = Math.round(b + (255 - b) * amt);
+    return `rgb(${lr}, ${lg}, ${lb})`;
+  }
+  function toRGBA(hex, a) {
+    const { r, g, b } = hexToRGB(hex);
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+  function applyAccent(hex) {
+    const root = document.documentElement.style;
+    root.setProperty('--case-accent',       hex);
+    root.setProperty('--case-accent-light', lightenHex(hex, 0.34));
+    root.setProperty('--case-accent-faded', toRGBA(hex, 0.42));
+    root.setProperty('--case-accent-glow',  toRGBA(hex, 0.6));
+    root.setProperty('--case-accent-halo',  toRGBA(hex, 0.22));
+  }
+
+  /* ─── case study open / close ─── */
+  const caseEl       = document.getElementById('case-study');
+  const caseBackEl   = document.getElementById('case-back');
+  const burstEl        = document.getElementById('title-burst');
+  const burstTextEl    = document.getElementById('title-burst-text');
+  const burstLabelEl   = document.getElementById('title-burst-eyebrow');
+  const burstCornerEls = document.querySelectorAll('.title-burst-corner');
+
+  // ASCII sweep — a tilted vertical band of ascii chars rakes across the
+  // screen left → right at the moment of the burst. shared shape with the
+  // sweep we built originally (lean, narrow band, ease-anchored progress),
+  // but the band's only job here is to TEXTURE the burst, not be it.
+  const burstSweepState = { progress: -0.18 };  // -0.18 = just off-screen left
+  function burstSweepDensity(c, r, cols, rows) {
+    const cNorm     = c / cols;
+    const rNorm     = r / rows;
+    const lean      = 0.18;                          // band tilts forward (/)
+    const projected = cNorm + lean * (0.5 - rNorm);
+    const bandWidth = 0.075;                         // ~7.5% of viewport
+    const dist      = (projected - burstSweepState.progress) / bandWidth;
+    return Math.max(0, 1 - dist * dist) * 0.95;
+  }
+  const burstAscii     = makeAsciiAnimator(
+    document.getElementById('title-burst-ascii'),
+    { updateRate: 0.5, densityFn: burstSweepDensity }
+  );
+  const caseAscii    = makeAsciiAnimator(document.getElementById('case-ascii'), { updateRate: 0.04 });
+  let   scrollMemory = 0;
+  let   caseIsOpen   = false;
+
+  // case-study lives in a neutral state by default — gsap animates opacity + scale.
+  gsap.set(caseEl, { opacity: 0, scale: 0.96 });
+
+  function populateCase(data) {
+    document.getElementById('case-eyebrow').textContent = `[ ${data.type} · ${data.year} ]`;
+    const titleEl = document.getElementById('case-title');
+    titleEl.innerHTML = `
+      <span class="case-title-text">${data.title}</span>
+      <span class="case-title-year">${data.year}</span>
+    `;
+
+    // lede: punchy hook (single paragraph, plain text)
+    document.getElementById('case-lede').textContent = data.lede || data.description || '';
+
+    // body: array of paragraph HTML strings; rendered as <p> blocks. Body is
+    // allowed to contain inline HTML (links, em) so we use innerHTML — content
+    // is authored, not user-supplied, so this is safe in our context.
+    const body = Array.isArray(data.body) ? data.body : (data.body ? [data.body] : []);
+    document.getElementById('case-body').innerHTML = body.map(p => `<p>${p}</p>`).join('');
+
+    // optional footnote-style disclaimer rendered in mono beneath the body.
+    document.getElementById('case-note').textContent = data.note || '';
+
+    // media: array of either { src, alt, caption, layout } objects or plain
+    // string paths. layout is one of: hero, mobile, tall, wide, half, third,
+    // aside, pin. omit for full-width. empty arrays leave .case-media empty
+    // and hidden via :empty.
+    const media = Array.isArray(data.images) ? data.images : [];
+    document.getElementById('case-media').innerHTML = media.map(item => {
+      const img = (typeof item === 'string') ? { src: item } : (item || {});
+      if (!img.src) return '';
+      const layoutClass = img.layout ? ` is-${img.layout}` : '';
+      const cap = img.caption ? `<figcaption>${img.caption}</figcaption>` : '';
+      return `<figure class="case-media-item${layoutClass}"><img src="${img.src}" alt="${img.alt || ''}" loading="lazy" />${cap}</figure>`;
+    }).join('');
+
+    document.getElementById('case-tags').innerHTML = data.tags.map(t => `<span class="case-tag">${t}</span>`).join('');
+    document.getElementById('case-meta').innerHTML = Object.entries(data.meta || {}).map(([k, v]) =>
+      `<div class="case-meta-row">
+         <span class="case-meta-key">${k}</span>
+         <span class="case-meta-val">${v}</span>
+       </div>`
+    ).join('');
+    document.getElementById('case-hero-label').textContent  = data.title;
+    document.getElementById('case-hero-corner').textContent = data.corner || 'SYS · 00';
+  }
+
+  function openCase(slug) {
+    if (caseIsOpen) return;
+    const data = WORKS[slug];
+    if (!data) return;
+    caseIsOpen = true;
+
+    scrollMemory = window.scrollY;
+    applyAccent(data.accent);
+
+    populateCase(data);
+    const titleText = document.querySelector('.case-title .case-title-text');
+    Splitting({ target: titleText, by: 'chars' });
+
+    // pre-hide every revealable bit; the burst sequence will tween them in.
+    gsap.set('.case-title .case-title-text .char',                  { opacity: 0, y: 22 });
+    gsap.set(['#case-eyebrow', '#case-lede'],                       { opacity: 0, y: 14 });
+    gsap.set('#case-body p',                                        { opacity: 0, y: 12 });
+    gsap.set('#case-note',                                          { opacity: 0, y: 10 });
+    gsap.set('#case-media figure',                                  { opacity: 0, y: 18 });
+    gsap.set(['#case-tags .case-tag', '#case-meta .case-meta-row'], { opacity: 0, y: 10 });
+    gsap.set('.case-hero',                                          { opacity: 0 });
+
+    caseEl.classList.add('is-open');
+    caseEl.setAttribute('aria-hidden', 'false');
+    document.documentElement.classList.add('case-open');
+    lenis.stop();
+    caseEl.scrollTop = 0;
+
+    runBurstSequence(slug, data);
+  }
+
+  function runBurstSequence(slug, data) {
+    // ── Build the burst content: each char wrapped in a span so we can
+    // stagger them independently on entry. Splitting.js does this cleanly.
+    burstTextEl.textContent  = data.title;
+    burstLabelEl.textContent = `${data.type} · ${data.year}`;
+    Splitting({ target: burstTextEl, by: 'chars' });
+    const burstChars = burstTextEl.querySelectorAll('.char');
+
+    // Reset every layer to a known starting state.
+    gsap.set(burstEl,        { opacity: 0 });
+    gsap.set(burstTextEl,    { opacity: 1, scale: 1, filter: 'blur(0px)' });
+    gsap.set(burstChars,     { opacity: 0, yPercent: 60 });
+    gsap.set(burstLabelEl,   { opacity: 0, y: 6 });
+    gsap.set(burstCornerEls, { opacity: 0, scale: 0.78, x: 0, y: 0 });
+    gsap.set(caseEl,         { opacity: 0, scale: 0.96, filter: 'blur(8px)' });
+
+    burstEl.classList.add('is-active');
+
+    // ── Phase 1: title materializes — chars sweep up; corners fan in.
+    gsap.to(burstEl,         { opacity: 1, duration: 0.22, ease: 'power2.out' });
+    gsap.to(burstLabelEl,    { opacity: 0.85, y: 0, duration: 0.5, ease: 'power2.out', delay: 0.05 });
+    gsap.to(burstCornerEls,  { opacity: 1, scale: 1, duration: 0.55, ease: 'power3.out', stagger: 0.05, delay: 0.04 });
+    gsap.to(burstChars, {
+      opacity: 1, yPercent: 0,
+      duration: 0.65, ease: 'power3.out',
+      stagger: 0.04, delay: 0.06
+    });
+
+    // Total entry time ≈ head delay + (n-1) × stagger + char tween duration.
+    // For 4–10-char titles this lands between ~0.85s and 1.05s.
+    const ENTRY_END = 0.06 + 0.04 * Math.max(0, burstChars.length - 1) + 0.65;
+
+    // ── Phase 2: hold (~0.22s) — let the title (and frame) breathe.
+    const HOLD_END = ENTRY_END + 0.22;
+
+    // ── Phase 3: BURST — title scatters; corner brackets fly outward toward
+    // their own corner of the viewport; a brief ASCII flash crackles through
+    // the overlay. one synchronized gesture, three layers of motion.
+    gsap.to(burstTextEl, {
+      scale: 1.18, opacity: 0, filter: 'blur(18px)',
+      duration: 0.65, ease: 'power3.in', delay: HOLD_END
+    });
+    gsap.to(burstLabelEl, {
+      opacity: 0, y: -4, duration: 0.32, ease: 'power2.in', delay: HOLD_END
+    });
+
+    // Corners disperse — each one toward its own corner of the screen.
+    const cornerExit = { opacity: 0, scale: 1.08, duration: 0.6, ease: 'power3.in', delay: HOLD_END };
+    gsap.to('.title-burst-corner--tl', { x: -64, y: -64, ...cornerExit });
+    gsap.to('.title-burst-corner--tr', { x:  64, y: -64, ...cornerExit });
+    gsap.to('.title-burst-corner--bl', { x: -64, y:  64, ...cornerExit });
+    gsap.to('.title-burst-corner--br', { x:  64, y:  64, ...cornerExit });
+
+    // ASCII sweep — band sits just off-screen-left, then rakes across to
+    // off-screen-right as the burst hits. starts the animator just before
+    // the visible opacity tween so the first painted frame already has
+    // chars in the band's footprint.
+    burstSweepState.progress = -0.18;
+    burstAscii.start();
+    gsap.set('#title-burst-ascii', { opacity: 0 });
+    const SWEEP_START = Math.max(0, HOLD_END - 0.05);
+    gsap.to('#title-burst-ascii', {
+      opacity: 0.9, duration: 0.12, ease: 'power2.out', delay: SWEEP_START
+    });
+    gsap.to(burstSweepState, {
+      progress: 1.22, duration: 0.78, ease: 'power3.out', delay: SWEEP_START
+    });
+    gsap.to('#title-burst-ascii', {
+      opacity: 0, duration: 0.28, ease: 'power2.in',
+      delay: SWEEP_START + 0.62,
+      onComplete: () => { burstAscii.stop(); }
+    });
+
+    gsap.to(burstEl, {
+      opacity: 0, duration: 0.5, ease: 'power2.inOut', delay: HOLD_END + 0.18,
+      onComplete: () => { burstEl.classList.remove('is-active'); }
+    });
+    gsap.to(caseEl, {
+      opacity: 1, scale: 1, filter: 'blur(0px)',
+      duration: 0.72, ease: 'power3.out', delay: HOLD_END + 0.05,
+      onComplete: () => {
+        // strip the lingering identity transform/filter that GSAP leaves
+        // behind. while idle we don't want .case-study to be a transformed
+        // scroll container — that's what enables the sub-pixel seam during
+        // fast inertia scroll. opacity stays explicit at 1.
+        gsap.set(caseEl, { clearProps: 'transform,filter,scale' });
+        requestAnimationFrame(() => caseAscii.start());
+      }
+    });
+
+    // ── Phase 4: case-page content staggers in on the tail of the reveal.
+    const REVEAL_DELAY = HOLD_END + 0.3;
+    gsap.to('.case-title .case-title-text .char', { opacity: 1, y: 0, duration: 0.55, stagger: 0.02, ease: 'power2.out', delay: REVEAL_DELAY + 0.06 });
+    gsap.to('#case-eyebrow',                      { opacity: 1, y: 0, duration: 0.5,  ease: 'power2.out', delay: REVEAL_DELAY });
+    gsap.to('#case-lede',                         { opacity: 1, y: 0, duration: 0.55, ease: 'power2.out', delay: REVEAL_DELAY + 0.18 });
+    gsap.to('#case-body p',                       { opacity: 1, y: 0, duration: 0.55, stagger: 0.04, ease: 'power2.out', delay: REVEAL_DELAY + 0.26 });
+    gsap.to('#case-note',                         { opacity: 1, y: 0, duration: 0.5,  ease: 'power2.out', delay: REVEAL_DELAY + 0.34 });
+    gsap.to('#case-tags .case-tag',               { opacity: 1, y: 0, duration: 0.45, stagger: 0.04, ease: 'power2.out', delay: REVEAL_DELAY + 0.40 });
+    gsap.to('#case-meta .case-meta-row',          { opacity: 1, y: 0, duration: 0.45, stagger: 0.05, ease: 'power2.out', delay: REVEAL_DELAY + 0.46 });
+    gsap.to('.case-hero',                         { opacity: 1, duration: 0.55, ease: 'power2.out', delay: REVEAL_DELAY + 0.08 });
+    // image collage takes the right column when present — stagger its figures
+    // in alongside the hero so the right side feels alive at the same beat.
+    gsap.to('#case-media figure',                 { opacity: 1, y: 0, duration: 0.6,  stagger: 0.07, ease: 'power2.out', delay: REVEAL_DELAY + 0.12 });
+
+    try { history.pushState({ case: slug }, '', `#case/${slug}`); } catch (e) {}
+  }
+
+  function closeCase() {
+    if (!caseIsOpen) return;
+    caseIsOpen = false;
+
+    // Clean exit — no ascii on close. The opening is the moment; closing is
+    // utility, so it just retreats.
+    gsap.to(caseEl, {
+      opacity: 0, scale: 0.96, filter: 'blur(4px)',
+      duration: 0.42, ease: 'power2.in',
+      onComplete: () => {
+        caseEl.classList.remove('is-open');
+        caseEl.setAttribute('aria-hidden', 'true');
+        document.documentElement.classList.remove('case-open');
+        lenis.start();
+        caseAscii.stop();
+        gsap.set(caseEl, { opacity: 0, scale: 0.96, filter: 'blur(0px)' });
+        window.scrollTo(0, scrollMemory);
+
+        if (location.hash.startsWith('#case/')) {
+          try { history.pushState({}, '', location.pathname + location.search); } catch (e) {}
+        }
+      }
+    });
+  }
+
+  /* wire up clicks on work rows */
+  document.querySelectorAll('.work-item[data-slug]').forEach(el => {
+    el.addEventListener('click', () => openCase(el.dataset.slug));
+  });
+
+  caseBackEl.addEventListener('click', closeCase);
+
+  /* keyboard + browser back */
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && caseIsOpen) closeCase();
+  });
+  window.addEventListener('popstate', () => {
+    if (caseIsOpen) closeCase();
+  });
+
+  /* deep link: if loaded with #case/<slug>, open that case */
+  if (location.hash.startsWith('#case/')) {
+    const slug = location.hash.replace('#case/', '');
+    setTimeout(() => openCase(slug), 3500);
+  }
 </script>
 
 </body>
