@@ -1353,14 +1353,141 @@
       .case-hero { position: relative; top: 0; aspect-ratio: 4 / 3; }
     }
 
+    /* ─── mobile / touch ─── */
+    /* kill the custom cursor anywhere a pointer isn't precise (touch devices). */
+    @media (hover: none), (pointer: coarse) {
+      #cursor-canvas { display: none !important; }
+      body, .work-item, .case-back, .case-study, .case-title { cursor: auto !important; }
+      /* freeze the work-name slide on hover; tap targets shouldn't move */
+      .work-item:hover .work-name { transform: none; }
+    }
+
+    /* scroll-focus state mirrors :hover for touch devices. JS picks the
+       row closest to viewport center, adds .is-focus, and the wipe-in
+       fires (same clip-path, same text inversion) — terminal canvas
+       reparents into that overlay just like it does on hover. */
+    .work-item.is-focus .work-overlay { clip-path: inset(0 0% 0 0); }
+    .work-item.is-focus .work-num,
+    .work-item.is-focus .work-name,
+    .work-item.is-focus .work-year,
+    .work-item.is-focus .work-cats,
+    .work-item.is-focus .work-type { color: #000; }
+    .work-item[style].is-focus .work-num,
+    .work-item[style].is-focus .work-name,
+    .work-item[style].is-focus .work-year,
+    .work-item[style].is-focus .work-cats,
+    .work-item[style].is-focus .work-type { color: #fff; }
+    .work-item[style].is-focus .work-type {
+      text-shadow: none;
+      animation: none;
+    }
+    .work-item[style].is-focus::before { opacity: 0; transition: opacity var(--t-standard) var(--ease-out); }
+
+    @media (max-width: 880px) {
+      :root { --pad: clamp(16px, 5vw, 24px); }
+      nav { mix-blend-mode: normal; color: var(--fg); background: rgba(0,0,0,0.72); backdrop-filter: blur(10px); }
+      .nav-links { gap: clamp(12px, 3vw, 18px); }
+      .nav-clock { display: none; }
+
+      /* hero: title pinned near bottom (like desktop) so the dot pattern
+         lives above as atmosphere instead of dead space below it. */
+      .hero {
+        padding: calc(var(--nav-h) + 16px) var(--pad) 36px;
+        min-height: 92svh;
+        justify-content: flex-end;
+      }
+      /* re-anchor the bloom + vignette to where the title actually sits
+         on mobile (lower portion). desktop overlays were aimed at 45%/95%
+         which puts the bright glow above the title and a dark blob below
+         it on a stacked layout — both wrong. */
+      .hero-glow {
+        background: radial-gradient(ellipse at 50% 78%, rgba(0, 60, 200, 0.55) 0%, transparent 60%);
+      }
+      .hero::after {
+        background:
+          linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 18%),
+          radial-gradient(ellipse at center 70%, transparent 35%, rgba(0,0,0,0.55) 100%);
+      }
+      .work-head { padding: 22px 0 14px; }
+
+      /* title was rewritten by JS into two .hero-line spans before Splitting
+         ran; just make them stack as blocks. */
+      .hero-title {
+        font-size: clamp(2.8rem, 13vw, 5rem);
+        line-height: 1.02;
+        max-width: 100%;
+      }
+      .hero-title .hero-line { display: block; }
+
+      .hero-tagline { max-width: 100%; font-size: .82rem; line-height: 1.55; }
+      .hero-foot {
+        flex-direction: row;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 14px;
+        margin-top: clamp(20px, 4vw, 32px);
+      }
+      /* horizontal SCROLL on mobile — vertical writing-mode reads as
+         cramped against the left edge */
+      .scroll-hint {
+        writing-mode: horizontal-tb;
+        transform: none;
+        font-size: .56rem;
+        letter-spacing: .26em;
+        white-space: nowrap;
+      }
+
+      /* work list: show year + type inline since we can't rely on hover */
+      .work-item {
+        grid-template-columns: 28px 1fr;
+        gap: 14px;
+        padding: 22px var(--pad);
+      }
+      .work-meta {
+        grid-column: 2 / -1;
+        flex-direction: row;
+        align-items: center;
+        gap: 12px;
+        margin-top: 6px;
+      }
+      .work-cats { display: none; }
+      .work-name { font-size: clamp(1.6rem, 7vw, 2.4rem); }
+      .work-num  { font-size: .62rem; }
+      .work-year, .work-type { font-size: .58rem; }
+      .work-item:hover .work-name { transform: none; }
+
+      /* about / contact stacks cleanly */
+      .about { grid-template-columns: 1fr; gap: 28px; }
+
+      /* case studies */
+      .case-grid { gap: 32px; padding: 24px var(--pad) 80px; }
+      .case-title { font-size: clamp(2rem, 9vw, 3.6rem); }
+      .case-lede  { font-size: 1.02rem; }
+      .case-body p { font-size: .96rem; }
+      .case-meta { grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+      .case-tags { gap: 6px; }
+      .case-tag  { font-size: .58rem; padding: 5px 9px; }
+      /* media gallery collapses to one column (the figure layout vars
+         already do this via the existing 920px rule; keep it explicit here
+         so nothing slips through). */
+      .case-media { gap: 14px; }
+      .case-back  { top: 14px; left: 14px; }
+    }
+
     @media (max-width: 640px) {
-      .about { grid-template-columns: 1fr; }
-      .work-item { grid-template-columns: auto 1fr; }
-      .work-meta { display: none; }
-      nav { mix-blend-mode: normal; color: var(--fg); background: var(--bg); }
-      #cursor { display: none; }
-      body { cursor: auto; }
-      .case-meta { grid-template-columns: 1fr 1fr; }
+      .case-meta { grid-template-columns: 1fr; }
+      /* tighten the work list once more on very small screens */
+      .work-meta { gap: 8px; }
+      .marquee-text { font-size: 1.2rem; }
+    }
+
+    /* respect users who explicitly ask for less motion */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+      }
     }
   </style>
 </head>
@@ -1660,6 +1787,18 @@
   window.addEventListener('load', () => setTimeout(startSite, 3200));
 
   /* ─── Splitting.js ─── */
+  // Rewrite the hero title for narrow viewports BEFORE Splitting runs.
+  // Two explicit block-level spans → "praneel" / "harvard cs" stack cleanly,
+  // no orphaned dot, no whitespace artifacts. Splitting still chars-up
+  // both lines and the reveal selector ('.hero-title .char') keeps working.
+  if (window.matchMedia('(max-width: 880px)').matches) {
+    const ht = document.querySelector('.hero-title');
+    if (ht) {
+      ht.innerHTML =
+        '<span class="hero-line">praneel</span>' +
+        '<span class="hero-line">harvard cs</span>';
+    }
+  }
   Splitting();
 
   /* ─── hero reveal (runs after preloader) ───────────────────────────
@@ -1732,12 +1871,18 @@
 
 
   /* ─── canvas cursor ─── */
+  // touch / coarse-pointer devices skip the whole custom cursor pipeline.
+  // CSS already hides the canvas; we also skip the JS so we don't burn a
+  // pointermove → RAF loop nobody can see.
+  const IS_TOUCH = window.matchMedia('(hover: none), (pointer: coarse)').matches;
   const cc   = document.getElementById('cursor-canvas');
-  const cctx = cc.getContext('2d');
+  const cctx = !IS_TOUCH && cc ? cc.getContext('2d') : null;
 
-  function resizeCC() { cc.width = window.innerWidth; cc.height = window.innerHeight; }
-  resizeCC();
-  window.addEventListener('resize', resizeCC);
+  function resizeCC() { if (!IS_TOUCH) { cc.width = window.innerWidth; cc.height = window.innerHeight; } }
+  if (!IS_TOUCH) {
+    resizeCC();
+    window.addEventListener('resize', resizeCC);
+  }
 
   const mouse = { x: -200, y: -200 };
   const main  = { x: -200, y: -200 };
@@ -1748,7 +1893,7 @@
   let ccRAF;
   const PI2 = Math.PI * 2;
 
-  document.addEventListener('mousemove', e => {
+  if (!IS_TOUCH) document.addEventListener('mousemove', e => {
     mouse.x = e.clientX;
     mouse.y = e.clientY;
     if (!ccActive) { ccActive = true; drawCC(); }
@@ -2351,6 +2496,7 @@
 <!-- Flip USE_TERMINAL_HOVER to false below to revert to the original solid-accent hover. -->
 <script type="module">
   const USE_TERMINAL_HOVER = true;
+  const IS_TOUCH = window.matchMedia('(hover: none), (pointer: coarse)').matches;
 
   if (USE_TERMINAL_HOVER) {
     const { Renderer, Program, Mesh, Color, Triangle } =
@@ -2529,37 +2675,84 @@
       );
     }
 
-    document.querySelectorAll('.work-item').forEach(item => {
-      item.addEventListener('mouseenter', () => {
-        const overlay = item.querySelector('.work-overlay');
-        if (!overlay) return;
-        currentItem = item;
-        overlay.appendChild(canvas);
-        const accent = (item.style.getPropertyValue('--accent') || '#ffffff').trim();
-        const [r, g, b] = hexToRgb(accent);
-        program.uniforms.uTint.value = new Color(r, g, b);
+    function activate(item) {
+      if (!item || item === currentItem) return;
+      const overlay = item.querySelector('.work-overlay');
+      if (!overlay) return;
+      currentItem = item;
+      overlay.appendChild(canvas);
 
-        const p = PER_SLUG[item.dataset.slug] || DEFAULTS;
-        program.uniforms.uScale.value             = p.scale;
-        program.uniforms.uDigitSize.value         = p.digit;
-        program.uniforms.uGridMul.value[0]        = p.gridX;
-        program.uniforms.uGridMul.value[1]        = p.gridY;
-        program.uniforms.uScanlineIntensity.value = p.scan;
-        program.uniforms.uFlickerAmount.value     = p.flicker;
-        program.uniforms.uGlitchAmount.value      = p.glitch;
-        program.uniforms.uNoiseAmp.value          = p.noise;
-        program.uniforms.uBrightness.value        = p.bright;
-        currentSpeed                              = p.speed;
+      const accent = (item.style.getPropertyValue('--accent') || '#ffffff').trim();
+      const [r, g, b] = hexToRgb(accent);
+      program.uniforms.uTint.value = new Color(r, g, b);
 
-        resizeToCurrent();
-        if (!raf) raf = requestAnimationFrame(tick);
+      const p = PER_SLUG[item.dataset.slug] || DEFAULTS;
+      program.uniforms.uScale.value             = p.scale;
+      program.uniforms.uDigitSize.value         = p.digit;
+      program.uniforms.uGridMul.value[0]        = p.gridX;
+      program.uniforms.uGridMul.value[1]        = p.gridY;
+      program.uniforms.uScanlineIntensity.value = p.scan;
+      program.uniforms.uFlickerAmount.value     = p.flicker;
+      program.uniforms.uGlitchAmount.value      = p.glitch;
+      program.uniforms.uNoiseAmp.value          = p.noise;
+      program.uniforms.uBrightness.value        = p.bright;
+      currentSpeed                              = p.speed;
+
+      resizeToCurrent();
+      if (!raf) raf = requestAnimationFrame(tick);
+    }
+
+    function deactivate(item) {
+      if (currentItem === item) currentItem = null;
+    }
+
+    const items = document.querySelectorAll('.work-item[data-slug]');
+
+    if (!IS_TOUCH) {
+      // ── desktop: hover drives the activation ──
+      items.forEach(item => {
+        item.addEventListener('mouseenter', () => activate(item));
+        item.addEventListener('mouseleave', () => deactivate(item));
       });
-      item.addEventListener('mouseleave', () => {
-        // leave the canvas parented in place until something else claims it.
-        // we just stop the RAF — saves the GPU when no row is hovered.
-        if (currentItem === item) currentItem = null;
-      });
-    });
+    } else {
+      // ── touch: scroll drives it. nearest row to viewport center wins.
+      // We add .is-focus to the chosen row so the wipe-in + text inversion
+      // fire (same CSS path as :hover, just keyed off the class).
+      const list = [...items];
+      let focusEl = null;
+
+      function pickFocus() {
+        const centerY = window.innerHeight * 0.55;     // slight downward bias
+        const ACTIVATE_BAND = window.innerHeight * 0.6; // must be reasonably close to center
+        let best = null, bestDist = Infinity;
+        for (const it of list) {
+          const r = it.getBoundingClientRect();
+          if (r.bottom < 0 || r.top > window.innerHeight) continue;
+          const d = Math.abs((r.top + r.bottom) / 2 - centerY);
+          if (d < bestDist) { bestDist = d; best = it; }
+        }
+        return bestDist < ACTIVATE_BAND ? best : null;
+      }
+
+      let scrollRaf = 0;
+      function updateFocus() {
+        scrollRaf = 0;
+        const next = pickFocus();
+        if (next === focusEl) return;
+        if (focusEl) { focusEl.classList.remove('is-focus'); deactivate(focusEl); }
+        focusEl = next;
+        if (focusEl) { focusEl.classList.add('is-focus'); activate(focusEl); }
+      }
+
+      function onScroll() {
+        if (!scrollRaf) scrollRaf = requestAnimationFrame(updateFocus);
+      }
+
+      window.addEventListener('scroll', onScroll, { passive: true });
+      window.addEventListener('resize', () => { onScroll(); resizeToCurrent(); });
+      // initial pick after layout settles
+      requestAnimationFrame(updateFocus);
+    }
 
     window.addEventListener('resize', resizeToCurrent);
   }
