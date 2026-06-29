@@ -176,9 +176,21 @@
     }
 
     .nav-links {
-      display: flex;
-      gap: clamp(18px, 3vw, 48px);
+      /* 3-col grid centered on the MIDDLE link: equal side columns mean
+         "about" sits on the exact center axis and "work"/"contact" mirror
+         each other around it — symmetric, not just box-centered. */
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      column-gap: clamp(18px, 3vw, 48px);
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
     }
+    .nav-links a:nth-child(1) { justify-self: end; }     /* work → toward center */
+    .nav-links a:nth-child(2) { justify-self: center; }  /* about → dead center */
+    .nav-links a:nth-child(3) { justify-self: start; }   /* contact → toward center */
 
     .nav-links a {
       font-size: .76rem;
@@ -222,7 +234,107 @@
       height: 100%;
       border: 0;
       display: block;
+      /* iframe is purely visual — never intercept pointer/touch so the
+         page scrolls past the hero on mobile and the parent owns the
+         only interactive control (the music player below). */
+      pointer-events: none;
+      /* keep this on its own compositor layer so scrolling away and back
+         doesn't tear down + re-promote it (a source of the resume hitch). */
+      transform: translateZ(0);
+      backface-visibility: hidden;
     }
+
+    /* ─── music player (lives in PARENT so iOS gesture unlock + scroll
+       both work; the visual iframe is pointer-events:none) ─── */
+    #music-player {
+      position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 18px;
+      padding: 10px 18px;
+      background: rgba(10, 12, 22, 0.55);
+      backdrop-filter: blur(14px) saturate(120%);
+      -webkit-backdrop-filter: blur(14px) saturate(120%);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 999px;
+      z-index: 50;
+      user-select: none;
+      transition: opacity .4s ease;
+    }
+    /* fade the player out once you scroll past the hero */
+    #music-player.is-hidden { opacity: 0; pointer-events: none; }
+    #music-toggle {
+      background: none; border: none; padding: 4px;
+      color: rgba(255,255,255,0.8); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: color .25s, transform .2s;
+    }
+    #music-toggle:hover { color: #fff; transform: scale(1.08); }
+    #music-toggle svg { width: 18px; height: 18px; display: block; }
+    /* invisible counterweight = play button (18px svg + 4px×2 padding) so
+       the slider track sits on the exact viewport-center axis */
+    .np-balance { width: 26px; flex: 0 0 26px; }
+    .slider-wrapper {
+      display: flex; align-items: center; gap: 12px;
+      width: 200px; touch-action: none; user-select: none;
+      transition: transform .22s cubic-bezier(.23,1,.32,1), opacity .22s;
+      opacity: 0.7;
+    }
+    .slider-wrapper.is-hover { transform: scale(1.18); opacity: 1; }
+    .slider-wrapper .vol-icon {
+      width: 16px; height: 16px; color: rgba(255,255,255,0.65);
+      display: flex; align-items: center; justify-content: center;
+      transform: translateX(0);
+      transition: transform .22s cubic-bezier(.23,1,.32,1);
+    }
+    .slider-wrapper .vol-icon svg { width: 16px; height: 16px; display: block; }
+    .slider-root {
+      position: relative; flex: 1;
+      cursor: grab; padding: 14px 0;
+      touch-action: none;
+    }
+    .slider-root:active { cursor: grabbing; }
+    .slider-track-wrap { transform-origin: center; transition: height .22s ease, margin .22s ease; }
+    .slider-track {
+      position: relative; height: 4px;
+      background: rgba(255,255,255,0.18);
+      border-radius: 999px; overflow: hidden;
+      transition: height .22s ease;
+    }
+    .slider-wrapper.is-hover .slider-track { height: 8px; }
+    .slider-range {
+      position: absolute; left: 0; top: 0; bottom: 0;
+      background: rgba(255,255,255,0.85);
+      border-radius: 999px; width: 25%;
+    }
+    /* now-playing buffer strip between hero and work */
+    .now-playing {
+      display: flex; align-items: center; justify-content: center;
+      gap: clamp(16px, 3vw, 32px);
+      padding: clamp(28px, 5vw, 52px) var(--pad);
+      background: #000;
+    }
+    .now-playing .np-label,
+    .now-playing .np-title {
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      font-size: .62rem; letter-spacing: .26em; text-transform: uppercase;
+      color: rgba(255,255,255,0.45); white-space: nowrap;
+    }
+    .now-playing .np-title { color: rgba(255,255,255,0.7); }
+    .now-playing .np-wave {
+      flex: 1; max-width: 420px; height: 36px; display: block;
+    }
+
+    /* subtle "tap for sound" hint until first interaction */
+    #sound-hint {
+      position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%);
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      font-size: .58rem; letter-spacing: .22em; text-transform: uppercase;
+      color: rgba(255,255,255,0.5); z-index: 50; pointer-events: none;
+      white-space: nowrap;
+      transition: opacity .5s ease;
+      animation: sound-hint-pulse 2.4s ease-in-out infinite;
+    }
+    #sound-hint.is-gone { opacity: 0; }
+    @keyframes sound-hint-pulse { 0%,100% { opacity: .3; } 50% { opacity: .65; } }
 
     /* ─── (original) hero ─── */
     .hero {
@@ -1588,6 +1700,7 @@
      To revert: comment out this section and uncomment the OLD HERO below. -->
 <section class="hero hero-3d">
   <iframe
+    id="hero-frame"
     src="rayquaza-flying-clean.html"
     class="hero-frame"
     title="praneel · 3d hero"
@@ -1595,6 +1708,32 @@
     loading="eager"
     frameborder="0"></iframe>
 </section>
+
+<!-- music player (parent-owned; drives the audio + feeds amplitude to the hero iframe) -->
+<audio id="bg-audio" src="music/bg-music.mp3" loop preload="auto" playsinline></audio>
+<div id="sound-hint">tap for sound</div>
+<div id="music-player">
+  <button id="music-toggle" aria-label="Toggle music">
+    <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7L8 5z"/></svg>
+    <svg id="icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+  </button>
+  <div class="slider-wrapper" id="vol-wrapper">
+    <div class="vol-icon left">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 9v6h4l5 4V5L9 9H5z"/></svg>
+    </div>
+    <div class="slider-root" id="vol-root">
+      <div class="slider-track-wrap" id="vol-trackwrap">
+        <div class="slider-track"><div class="slider-range" id="vol-range"></div></div>
+      </div>
+    </div>
+    <div class="vol-icon right">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 4V5L7 9H3zm10.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>
+    </div>
+  </div>
+  <!-- spacer mirrors the play button on the left so the SLIDER TRACK
+       (not the whole pill) lands on the viewport center axis -->
+  <span class="np-balance" aria-hidden="true"></span>
+</div>
 
 <!-- OLD HERO (stashed — original dot-pattern hero). To restore: remove
      the hero-3d section above and uncomment this block.
@@ -1616,6 +1755,13 @@
 </section>
 -->
 
+<!-- ── now-playing buffer strip (also a perf breather between the heavy
+     hero and the work list) ── -->
+<section class="now-playing" id="now-playing">
+  <span class="np-label">now playing</span>
+  <canvas id="np-wave" class="np-wave"></canvas>
+  <span class="np-title">astrothunder · slowed</span>
+</section>
 
 <hr class="rule">
 
@@ -1922,7 +2068,12 @@
   });
 
   /* ─── lenis smooth scroll ─── */
-  const lenis = new Lenis({ lerp: 0.08, smoothWheel: true });
+  // touch devices get NATIVE scroll (smoothWheel off, no touch sync) — JS
+  // scroll-smoothing on mobile felt laggy and "pushed back" against the
+  // finger. Lenis stays instantiated so scrollTo()/stop()/start() still
+  // work for anchor nav + case-study open/close.
+  const LENIS_TOUCH = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+  const lenis = new Lenis({ lerp: 0.08, smoothWheel: !LENIS_TOUCH, syncTouch: false });
   lenis.on('scroll', ScrollTrigger.update);
   gsap.ticker.add(time => lenis.raf(time * 1000));
   gsap.ticker.lagSmoothing(0);
@@ -2670,7 +2821,13 @@
       return [((n>>16)&255)/255, ((n>>8)&255)/255, (n&255)/255];
     }
 
-    const renderer = new Renderer({ dpr: Math.min(window.devicePixelRatio || 1, 2), alpha: false });
+    // touch → DPR 1 (native-pixel render, browser upscales) so the
+    // per-row shader stays smooth during scroll; desktop → up to 2.
+    const TERM_DPR = IS_TOUCH ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+    // preserveDrawingBuffer so we can snapshot the canvas into a static
+    // image when the effect moves off a row (keeps the terminal visible
+    // on the leaving row as it wipes out, instead of a flat-color flash).
+    const renderer = new Renderer({ dpr: TERM_DPR, alpha: false, preserveDrawingBuffer: true });
     const gl = renderer.gl;
     gl.clearColor(0, 0, 0, 1);
     const canvas = gl.canvas;
@@ -2736,10 +2893,30 @@
       );
     }
 
+    // freeze the leaving row's terminal into a static <canvas> snapshot
+    // so it keeps showing the effect while its overlay wipes out, rather
+    // than flashing flat accent. The snapshot is removed once the
+    // wipe-out (var(--t-emphatic), ~0.6s) has finished.
+    function snapshotInto(oldItem) {
+      const ov = oldItem.querySelector('.work-overlay');
+      if (!ov) return;
+      const snap = document.createElement('canvas');
+      snap.width = canvas.width; snap.height = canvas.height;
+      snap.className = 'work-terminal-snap';
+      snap.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;';
+      try { snap.getContext('2d').drawImage(canvas, 0, 0); } catch (e) {}
+      ov.appendChild(snap);
+      setTimeout(() => snap.remove(), 700);
+    }
+
     function activate(item) {
       if (!item || item === currentItem) return;
       const overlay = item.querySelector('.work-overlay');
       if (!overlay) return;
+      // leave a frozen snapshot on the row we're moving away from
+      if (currentItem && currentItem !== item) snapshotInto(currentItem);
+      // clear any stale snapshot on the row we're entering
+      overlay.querySelectorAll('.work-terminal-snap').forEach(s => s.remove());
       currentItem = item;
       overlay.appendChild(canvas);
 
@@ -2770,32 +2947,28 @@
     const items = document.querySelectorAll('.work-item[data-slug]');
 
     if (!IS_TOUCH) {
-      // ── desktop: hover drives the activation ──
+      // desktop: hover drives the terminal activation
       items.forEach(item => {
         item.addEventListener('mouseenter', () => activate(item));
         item.addEventListener('mouseleave', () => deactivate(item));
       });
     } else {
-      // ── touch: scroll drives it. nearest row to viewport center wins.
-      // We add .is-focus to the chosen row so the wipe-in + text inversion
-      // fire (same CSS path as :hover, just keyed off the class).
+      // touch: scroll drives it — the row nearest viewport-center gets the
+      // terminal (rendered at DPR 1 so it stays smooth). Same .is-focus
+      // class so the wipe + text inversion fire too.
       const list = [...items];
-      let focusEl = null;
-
+      let focusEl = null, scrollRaf = 0;
       function pickFocus() {
-        const centerY = window.innerHeight * 0.55;     // slight downward bias
-        const ACTIVATE_BAND = window.innerHeight * 0.6; // must be reasonably close to center
-        let best = null, bestDist = Infinity;
+        const cy = window.innerHeight * 0.55, band = window.innerHeight * 0.6;
+        let best = null, bestD = Infinity;
         for (const it of list) {
           const r = it.getBoundingClientRect();
           if (r.bottom < 0 || r.top > window.innerHeight) continue;
-          const d = Math.abs((r.top + r.bottom) / 2 - centerY);
-          if (d < bestDist) { bestDist = d; best = it; }
+          const d = Math.abs((r.top + r.bottom) / 2 - cy);
+          if (d < bestD) { bestD = d; best = it; }
         }
-        return bestDist < ACTIVATE_BAND ? best : null;
+        return bestD < band ? best : null;
       }
-
-      let scrollRaf = 0;
       function updateFocus() {
         scrollRaf = 0;
         const next = pickFocus();
@@ -2804,14 +2977,9 @@
         focusEl = next;
         if (focusEl) { focusEl.classList.add('is-focus'); activate(focusEl); }
       }
-
-      function onScroll() {
-        if (!scrollRaf) scrollRaf = requestAnimationFrame(updateFocus);
-      }
-
+      const onScroll = () => { if (!scrollRaf) scrollRaf = requestAnimationFrame(updateFocus); };
       window.addEventListener('scroll', onScroll, { passive: true });
       window.addEventListener('resize', () => { onScroll(); resizeToCurrent(); });
-      // initial pick after layout settles
       requestAnimationFrame(updateFocus);
     }
 
@@ -2829,20 +2997,279 @@
     if (!heroEl) return;
     const frame = heroEl.querySelector('iframe.hero-frame');
     if (!frame) return;
-    let paused = false;
-    const send = (action) => {
-      if (frame.contentWindow) {
-        frame.contentWindow.postMessage({ __heroAction: action }, '*');
+    // The hero's WebGL shares the main thread with page scroll. We pause
+    // it (a) when fully off-screen, and (b) while actively scrolling BUT
+    // ONLY once it's already leaving view (<85% visible) — so small
+    // scrolls while the hero still fills the screen never freeze it; the
+    // throttle only kicks in for the scroll-away, smoothing that motion.
+    let heroRatio = 1;
+    let scrolling = false;
+    let lastSent  = null;
+    function syncHero() {
+      let action;
+      if (heroRatio < 0.02)      action = 'pause';     // fully off-screen → stop
+      else if (scrolling)        action = 'throttle';  // scrolling → low fps, never freezes
+      else                       action = 'resume';    // idle + visible → full fps
+      if (action === lastSent) return;
+      lastSent = action;
+      if (frame.contentWindow) frame.contentWindow.postMessage({ __heroAction: action }, '*');
+    }
+
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) heroRatio = e.intersectionRatio;
+      const player = document.getElementById('music-player');
+      if (player) player.classList.toggle('is-hidden', heroRatio < 0.4);
+      syncHero();
+    }, { threshold: [0, 0.02, 0.2, 0.4, 0.6, 0.8, 1] });
+    io.observe(heroEl);
+
+    let scrollSettle = 0;
+    window.addEventListener('scroll', () => {
+      if (!scrolling) { scrolling = true; syncHero(); }
+      clearTimeout(scrollSettle);
+      scrollSettle = setTimeout(() => { scrolling = false; syncHero(); }, 180);
+    }, { passive: true });
+  })();
+
+  /* ─── parent-owned audio engine + music player ────────────────────
+     Audio lives here in the TOP browsing context (not the iframe) so:
+       • iOS unlocks it from a real gesture on this page (the iframe is
+         pointer-events:none and never receives one);
+       • the page scrolls freely past the hero (no iframe touch-trap).
+     We compute amplitude from an AnalyserNode and push it straight into
+     the same-origin iframe via `__heroAmp` so the scene stays reactive. */
+  (function () {
+    const audio   = document.getElementById('bg-audio');
+    const frame   = document.getElementById('hero-frame');
+    const hint    = document.getElementById('sound-hint');
+    const wrapper = document.getElementById('vol-wrapper');
+    const root    = document.getElementById('vol-root');
+    const range   = document.getElementById('vol-range');
+    const trackwrap = document.getElementById('vol-trackwrap');
+    const leftIcon  = wrapper.querySelector('.vol-icon.left');
+    const rightIcon = wrapper.querySelector('.vol-icon.right');
+    const toggleBtn = document.getElementById('music-toggle');
+    const iconPlay  = document.getElementById('icon-play');
+    const iconPause = document.getElementById('icon-pause');
+
+    let audioCtx = null, analyser = null, gainNode = null, bytes = null;
+    let ready = false, started = false;
+    let volume = 0.25;          // 0..1
+
+    // Build the Web Audio graph. Must be created/resumed inside a user
+    // gesture on iOS, so we call this from the unlock handler.
+    function buildGraph() {
+      if (ready) return;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = audioCtx.createMediaElementSource(audio);
+      analyser  = audioCtx.createAnalyser();
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.85;
+      gainNode  = audioCtx.createGain();
+      gainNode.gain.value = volume;
+      src.connect(analyser);
+      analyser.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      bytes = new Uint8Array(analyser.frequencyBinCount);
+      ready = true;
+      ensureCryBuffer();
+    }
+
+    /* ── click Rayquaza → play its cry ──
+       cry plays through the already-unlocked AudioContext (decoded buffer)
+       so it fires instantly with no gesture-timing issues; falls back to a
+       plain <audio> if the context isn't up yet. */
+    const cryAudio = new Audio('sfx/rayquaza-cry.mp3');
+    cryAudio.preload = 'auto';
+    let cryBuffer = null, cryFetching = false;
+    function ensureCryBuffer() {
+      if (cryBuffer || cryFetching || !audioCtx) return;
+      cryFetching = true;
+      fetch('sfx/rayquaza-cry.mp3').then(r => r.arrayBuffer())
+        .then(b => audioCtx.decodeAudioData(b))
+        .then(buf => { cryBuffer = buf; })
+        .catch(() => { cryFetching = false; });
+    }
+    window.__playCry = function () {
+      if (audioCtx && cryBuffer) {
+        const s = audioCtx.createBufferSource();
+        s.buffer = cryBuffer;
+        const g = audioCtx.createGain(); g.gain.value = 0.32;
+        s.connect(g); g.connect(audioCtx.destination);
+        s.start(0);
+      } else {
+        const a = cryAudio.cloneNode(); a.volume = 0.32; a.play().catch(() => {});
       }
     };
-    const io = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        const visible = e.isIntersecting && e.intersectionRatio > 0.02;
-        if (visible && paused)     { paused = false; send('resume'); }
-        else if (!visible && !paused) { paused = true;  send('pause');  }
+    // forward hero clicks (iframe is pointer-events:none, so they land here)
+    // to the iframe as normalized device coords for model raycasting.
+    if (frame) {
+      const heroEl = document.querySelector('.hero-3d');
+      (heroEl || frame).addEventListener('click', (e) => {
+        const r = frame.getBoundingClientRect();
+        const x = ((e.clientX - r.left) / r.width) * 2 - 1;
+        const y = -(((e.clientY - r.top) / r.height) * 2 - 1);
+        try { frame.contentWindow.__heroClick = { x, y }; } catch (err) {}
+      });
+    }
+
+    // iOS unlock: everything synchronous inside the gesture.
+    function unlock() {
+      try {
+        buildGraph();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        // 1-sample silent buffer fully unlocks the context on iOS
+        const b = audioCtx.createBuffer(1, 1, 22050);
+        const s = audioCtx.createBufferSource();
+        s.buffer = b; s.connect(audioCtx.destination); s.start(0);
+        audio.play().then(() => { started = true; refreshIcons(); }).catch(() => {});
+      } catch (e) { /* ignore */ }
+      dismissHint();
+    }
+    function dismissHint() {
+      if (hint && !hint.classList.contains('is-gone')) {
+        hint.classList.add('is-gone');
+        setTimeout(() => hint.remove(), 600);
       }
-    }, { threshold: [0, 0.02, 0.1] });
-    io.observe(heroEl);
+    }
+
+    // first interaction anywhere on the page starts the music
+    function onFirstGesture() {
+      unlock();
+      window.removeEventListener('pointerdown', onFirstGesture);
+      window.removeEventListener('touchend',   onFirstGesture);
+      window.removeEventListener('keydown',     onFirstGesture);
+    }
+    window.addEventListener('pointerdown', onFirstGesture, { passive: true });
+    window.addEventListener('touchend',   onFirstGesture, { passive: true });
+    window.addEventListener('keydown',     onFirstGesture, { passive: true });
+    // best-effort immediate start (works on browsers that allow it)
+    audio.play().then(() => { started = true; buildGraph(); refreshIcons(); dismissHint(); }).catch(() => {});
+
+    /* now-playing waveform (oscilloscope from time-domain data) */
+    const waveCanvas = document.getElementById('np-wave');
+    const waveCtx = waveCanvas ? waveCanvas.getContext('2d') : null;
+    let timeBytes = null;
+    function sizeWave() {
+      if (!waveCanvas) return;
+      const r = waveCanvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      waveCanvas.width = Math.max(1, r.width * dpr);
+      waveCanvas.height = Math.max(1, r.height * dpr);
+    }
+    if (waveCanvas) { sizeWave(); window.addEventListener('resize', sizeWave); }
+
+    // cheap equalizer: a row of thin white vertical bars whose heights
+    // follow the frequency spectrum, mirrored about the center line.
+    const BAR_COUNT = 40;
+    function drawWave() {
+      if (!waveCtx || !analyser) return;
+      // `bytes` is freshly filled with getByteFrequencyData in pumpAmp
+      const w = waveCanvas.width, h = waveCanvas.height, mid = h / 2;
+      waveCtx.clearRect(0, 0, w, h);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const barW = Math.max(1, dpr * 2);
+      const gap  = (w - BAR_COUNT * barW) / (BAR_COUNT - 1);
+      // sample the lower ~75% of the spectrum (skip the dead high end)
+      const usable = Math.floor(bytes.length * 0.75);
+      waveCtx.fillStyle = 'rgba(255,255,255,0.85)';
+      for (let i = 0; i < BAR_COUNT; i++) {
+        const idx = Math.floor((i / BAR_COUNT) * usable);
+        const v = bytes[idx] / 255;                 // 0..1
+        const barH = Math.max(dpr, v * v * h * 0.92); // square for snappier peaks
+        const x = i * (barW + gap);
+        waveCtx.fillRect(x, mid - barH / 2, barW, barH);
+      }
+    }
+
+    /* feed amplitude into the hero iframe + draw waveform every frame */
+    function pumpAmp() {
+      requestAnimationFrame(pumpAmp);
+      if (!ready) return;
+      analyser.getByteFrequencyData(bytes);
+      const N = Math.floor(bytes.length * 0.66);
+      let s = 0; for (let i = 0; i < N; i++) s += bytes[i];
+      if (frame && frame.contentWindow) {
+        try { frame.contentWindow.__heroAmp = s / (N * 255); } catch (e) {}
+      }
+      drawWave();
+    }
+    requestAnimationFrame(pumpAmp);
+
+    /* ── ElasticSlider (vanilla port) ── */
+    const MAX_OVERFLOW = 50;
+    const decay = (v, max) => max === 0 ? 0 : (2 * (1 / (1 + Math.exp(-(v / max))) - 0.5)) * max;
+    let value = 25, overflow = 0, dragging = false, region = 'middle';
+
+    function syncRange() {
+      range.style.width = value + '%';
+      volume = Math.max(0, Math.min(1, value / 100));
+      if (gainNode) gainNode.gain.value = volume; else audio.volume = volume;
+    }
+    function syncTrack() {
+      const rect = root.getBoundingClientRect();
+      const sx = 1 + Math.abs(overflow) / Math.max(1, rect.width);
+      const sy = 1 - (Math.abs(overflow) / MAX_OVERFLOW) * 0.2;
+      trackwrap.style.transformOrigin = (region === 'left' ? 'right' : 'left') + ' center';
+      trackwrap.style.transform = `scaleX(${sx}) scaleY(${sy})`;
+    }
+    function syncIcons() {
+      const off = decay(Math.abs(overflow), MAX_OVERFLOW);
+      leftIcon.style.transform  = region === 'left'  ? `translateX(${-off}px) scale(1.25)` : 'translateX(0) scale(1)';
+      rightIcon.style.transform = region === 'right' ? `translateX(${ off}px) scale(1.25)` : 'translateX(0) scale(1)';
+    }
+    function onMove(e) {
+      const rect = root.getBoundingClientRect();
+      const x = e.clientX;
+      value = Math.max(0, Math.min(100, ((x - rect.left) / rect.width) * 100));
+      syncRange();
+      if (x < rect.left)       { region = 'left';   overflow = -decay(rect.left - x, MAX_OVERFLOW); }
+      else if (x > rect.right) { region = 'right';  overflow =  decay(x - rect.right, MAX_OVERFLOW); }
+      else                     { region = 'middle'; overflow = 0; }
+      syncTrack(); syncIcons();
+    }
+    function springBack() {
+      const start = overflow, t0 = performance.now(), dur = 360;
+      (function step(now) {
+        const t = Math.min(1, (now - t0) / dur);
+        overflow = start * (1 - (1 - Math.pow(1 - t, 3)));
+        syncTrack(); syncIcons();
+        if (t < 1) requestAnimationFrame(step);
+        else { overflow = 0; region = 'middle'; syncTrack(); syncIcons(); }
+      })(t0);
+    }
+    root.addEventListener('pointerdown', e => {
+      // before playback starts, a tap on the slider should START the music
+      // at the default volume — NOT drag the volume (which would otherwise
+      // jump to ~0 if you tap the left side, making it play silently).
+      if (!started) { e.stopPropagation(); unlock(); return; }
+      dragging = true; root.setPointerCapture(e.pointerId); onMove(e);
+    });
+    root.addEventListener('pointermove', e => { if (dragging) onMove(e); });
+    const endDrag = () => { if (dragging) { dragging = false; springBack(); } };
+    root.addEventListener('pointerup', endDrag);
+    root.addEventListener('pointercancel', endDrag);
+    root.addEventListener('lostpointercapture', endDrag);
+    wrapper.addEventListener('pointerenter', () => wrapper.classList.add('is-hover'));
+    wrapper.addEventListener('pointerleave', () => wrapper.classList.remove('is-hover'));
+
+    function refreshIcons() {
+      const playing = !audio.paused;
+      iconPlay.style.display  = playing ? 'none' : 'block';
+      iconPause.style.display = playing ? 'block' : 'none';
+    }
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!ready) buildGraph();
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+      if (audio.paused) audio.play().catch(() => {}); else audio.pause();
+      refreshIcons();
+    });
+    audio.addEventListener('play',  refreshIcons);
+    audio.addEventListener('pause', refreshIcons);
+
+    syncRange();
+    refreshIcons();
   })();
 </script>
 

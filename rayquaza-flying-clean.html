@@ -4,13 +4,37 @@
   <meta charset="utf-8" />
   <title>rayquaza · flying (clean)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
   <style>
     html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden;
                  font-family: ui-monospace, 'SF Mono', Menlo, monospace; color: #fff; }
     canvas { display: block; width: 100vw; height: 100vh; }
-    #status { position: fixed; bottom: 12px; left: 14px; font-size: 12px;
-              color: rgba(255,255,255,0.85); background: rgba(0,0,0,0.55);
-              padding: 6px 10px; border-radius: 3px; }
+    #status { position: fixed; bottom: 22px; left: 24px;
+              pointer-events: none; text-transform: lowercase; line-height: 1.05;
+              display: flex; align-items: center; gap: 14px; }
+    #status .st-logo {
+      width: clamp(40px, 5vw, 60px); height: auto; display: block;
+      /* black-and-white logo → invert to white, then screen-blend so it
+         reads as a clean luminous mark floating on the dark scene. */
+      filter: invert(1) brightness(1.6);
+      mix-blend-mode: screen;
+      opacity: 0.9;
+    }
+    #status .st-text { display: flex; flex-direction: column; }
+    #status .st-main {
+      font-family: 'Hanken Grotesk', sans-serif;
+      font-weight: 800; letter-spacing: -.025em;
+      font-size: clamp(1.5rem, 2.8vw, 2.3rem);
+      color: rgba(255,255,255,0.95);
+    }
+    #status .st-sub {
+      margin-top: 4px;
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      font-size: .6rem; letter-spacing: .28em;
+      color: rgba(255,255,255,0.5);
+    }
     #err    { position: fixed; left: 14px; right: 14px; top: 14px;
               background: rgba(60,0,0,0.85); color: #ffd0d0; font-size: 12px;
               padding: 10px 14px; border-radius: 4px; white-space: pre-wrap;
@@ -37,6 +61,21 @@
     }
     #music-toggle:hover { color: #fff; transform: scale(1.08); }
     #music-toggle svg { width: 18px; height: 18px; display: block; }
+
+    /* pokemon switch — mirrors the music-toggle look, sits in the same bar */
+    #poke-toggle {
+      background: none; border: none; padding: 4px 8px;
+      color: rgba(255,255,255,0.8); cursor: pointer;
+      display: flex; align-items: center; gap: 6px;
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      font-size: .62rem; letter-spacing: .14em; text-transform: lowercase;
+      transition: color .25s, transform .2s;
+      border-left: 1px solid rgba(255,255,255,0.10);
+    }
+    #poke-toggle:hover { color: #fff; transform: scale(1.06); }
+    #poke-toggle:disabled { opacity: .45; cursor: progress; }
+    #poke-toggle svg { width: 16px; height: 16px; display: block; }
+    #poke-toggle .poke-name { min-width: 56px; text-align: left; }
 
     /* ElasticSlider — vanilla port of React Bits component */
     .slider-wrapper {
@@ -114,6 +153,16 @@
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 4V5L7 9H3zm10.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>
       </div>
     </div>
+
+    <!-- pokemon switcher: toggles the hero model between rayquaza + greninja -->
+    <button id="poke-toggle" aria-label="Switch pokemon" title="Switch pokemon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/>
+        <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>
+      </svg>
+      <span class="poke-name" id="poke-name">rayquaza</span>
+    </button>
   </div>
 
   <!-- elastic slider + player controls -->
@@ -276,14 +325,26 @@
     import { RenderPass }                   from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/RenderPass.js';
     import { UnrealBloomPass }              from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/UnrealBloomPass.js';
     import { OutputPass }                   from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/OutputPass.js';
+    import { ShaderPass }                    from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/ShaderPass.js';
 
     const canvas = document.getElementById('c');
     const status = document.getElementById('status');
-    const log = (m) => { status.textContent = m; };
+    // debug output goes to the console now; the on-screen corner element
+    // is a permanent aesthetic label instead.
+    const log = (m) => { console.log('[hero]', m); };
+    status.innerHTML =
+      '<img class="st-logo" src="harvard-logo.png" alt="" />' +
+      '<span class="st-text"><span class="st-main">harvard cs</span>' +
+      '<span class="st-sub">class of 2028</span></span>';
 
     /* ── renderer ─────────────────────────────────────────────────── */
+    // touch devices: cap DPR at 1 (vs 2) — halves the fragment-shader
+    // load (bloom + nebula + transmission are all per-pixel heavy), the
+    // single biggest win against mobile scroll jank.
+    const TOUCH_DEVICE = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+    const DPR_CAP = TOUCH_DEVICE ? 1 : 2;
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping      = THREE.NoToneMapping;
@@ -293,6 +354,41 @@
     const scene  = new THREE.Scene();
     scene.background = new THREE.Color('#000000');
     const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 4000);
+
+    // click → raycast Rayquaza. The parent (which owns pointer events,
+    // since this iframe is pointer-events:none) sets window.__heroClick to
+    // normalized device coords; we raycast against the model and, on a
+    // hit, play the cry (via the parent's unlocked audio) + flare the jaw.
+    const raycaster = new THREE.Raycaster();
+    let cryT = -10;   // timestamp of last cry, for the screech reaction
+
+    // easing helpers for the ballistic screech (see cry block in tick)
+    const clamp01 = x => Math.min(1, Math.max(0, x));
+    const easeOutCubic   = x => 1 - Math.pow(1 - x, 3);
+    const easeInOutCubic = x => x < 0.5 ? 4*x*x*x : 1 - Math.pow(-2*x + 2, 3) / 2;
+    const easeOutBack    = (x, s = 1.70158) => 1 + (s + 1) * Math.pow(x - 1, 3) + s * Math.pow(x - 1, 2);
+    const lerp = (a, b, t) => a + (b - a) * t;
+    // remap a sub-range of `since` into an eased 0..1
+    const seg = (since, t0, t1, ease) => ease(clamp01((since - t0) / (t1 - t0)));
+
+    // Measured RMS amplitude envelope of sfx/rayquaza-cry.mp3 (1.50s long),
+    // one sample every 40ms, peak-normalised 0..1. The cry is a long held
+    // screech with a natural warble, then a clean decay tail over the final
+    // ~240ms. The ballistic-screech block samples this directly so the jaw
+    // (and the body heave) track the actual sound rather than a synthetic sine.
+    const CRY_AMP = [0.771,1.0,0.96,0.9,0.927,0.94,0.857,0.876,0.887,0.93,0.947,
+                     0.928,0.918,0.901,0.787,0.887,0.833,0.779,0.828,0.839,0.797,
+                     0.839,0.843,0.793,0.876,0.82,0.807,0.849,0.813,0.819,0.876,
+                     0.82,0.659,0.485,0.259,0.104,0.039,0.01];
+    const CRY_AMP_STEP = 40; // ms between samples
+    // linear-interpolate the envelope at an arbitrary time (ms into the cry)
+    const ampAt = (ms) => {
+      if (ms <= 0) return CRY_AMP[0];
+      const x = ms / CRY_AMP_STEP;
+      const i = Math.floor(x);
+      if (i >= CRY_AMP.length - 1) return CRY_AMP[CRY_AMP.length - 1];
+      return lerp(CRY_AMP[i], CRY_AMP[i + 1], x - i);
+    };
 
     /* ── nebula sphere (cosmic backdrop behind stars) ──────────────
        Big inverted sphere with a procedural noise shader giving soft
@@ -307,6 +403,7 @@
         uniforms: {
           uTime: { value: 0 },
           uPulse: { value: 0 },   // audio amplitude 0..1, set every frame
+          uCloud: { value: 1 },   // cloud-band opacity (rayquaza only; faded out for greninja)
         },
         vertexShader: /* glsl */`
           varying vec3 vDir;
@@ -318,6 +415,7 @@
           varying vec3 vDir;
           uniform float uTime;
           uniform float uPulse;        // 0..1 audio amplitude
+          uniform float uCloud;        // 0..1 atmospheric cloud-band fade
 
           float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
           float noise(vec3 p){
@@ -364,14 +462,30 @@
               + electric * cloudA * cloudB * 0.18 * pulseLift
               + steel    * cloudB * 0.06;
 
+            // ── atmospheric cloud band (finishing touch) ──────────────
+            // wispy fbm bands drifting horizontally, concentrated on the
+            // lower hemisphere so the scene reads as "sky" near the
+            // horizon while staying deep space up high. Warm/violet tint
+            // so the bands look lit by the distant sun. uCloud fades the
+            // whole layer in only for rayquaza.
+            float band   = smoothstep(0.35, -0.85, h);           // 0 up top → 1 low
+            float cT     = uTime * 0.018;                          // slow horizontal drift
+            float cloudN = fbm(d * vec3(3.2, 4.5, 3.2) + vec3(cT, 0.0, cT * 0.3));
+            float wisp   = smoothstep(0.52, 0.95, cloudN) * band;
+            vec3 cloudWarm   = vec3(0.45, 0.30, 0.42);            // warm violet, catches the sun
+            vec3 cloudShadow = vec3(0.05, 0.06, 0.12);
+            vec3 cloudCol    = mix(cloudShadow, cloudWarm, smoothstep(0.6, 1.0, cloudN));
+            col += cloudCol * wisp * 0.16 * uCloud * pulseLift;
+
             gl_FragColor = vec4(col, 1.0);
           }`
       });
       const nebula = new THREE.Mesh(nebulaGeo, nebulaMat);
       nebula.renderOrder = -2;          // behind everything
       scene.add(nebula);
-      // expose so tick() can advance the noise time
-      window.__nebulaMat = nebulaMat;
+      // expose so tick() can advance the noise time + toggle visibility
+      window.__nebulaMat  = nebulaMat;
+      window.__nebulaMesh = nebula;
     }
 
     /* ── soft circular point texture (used by stars + dust) ────────
@@ -425,7 +539,9 @@
         // glowy blobs against the dark bg.
         blending: THREE.NormalBlending,
       });
-      scene.add(new THREE.Points(g, m));
+      const stars = new THREE.Points(g, m);
+      scene.add(stars);
+      window.__starfield = stars;   // toggled off for greninja
     }
 
     /* dust layer removed — was reading as ugly purple blobs against
@@ -488,7 +604,8 @@
     const rimLight = new THREE.DirectionalLight(0x5e8cff, 0.9);
     rimLight.position.set(-55, 15, -60);
     scene.add(rimLight);
-    scene.add(new THREE.AmbientLight(0x4060a0, 0.15));
+    const ambLight = new THREE.AmbientLight(0x4060a0, 0.15);
+    scene.add(ambLight);
 
     /* ── visible sun + lens flare ─────────────────────────────────── */
     // PointLight here is just an anchor for the lensflare sprite — its
@@ -518,13 +635,18 @@
       sunAnchor.add(lf);
     }
 
-    /* ── audio + Web Audio analyser ──────────────────────────────────
-       The <audio> element plays the user's bg-music.mp3. We pipe it
-       through an AnalyserNode to sample real-time amplitude. The tick
-       loop reads that amplitude and nudges the bloom strength up/down
-       so the scene visibly "breathes" with the track. */
+    /* ── audio amplitude source ──────────────────────────────────────
+       When this page is EMBEDDED inside index.html (the live hero), the
+       PARENT owns the audio + player and feeds us amplitude through the
+       same-origin global `window.__heroAmp`. This matters on iOS: audio
+       can only be unlocked by a gesture in the browsing context that
+       owns it, and the iframe is pointer-events:none so it never
+       receives one. Parent-owned audio is the only reliable path.
+
+       When opened STANDALONE (dev), we run our own audio engine so the
+       scene still has sound + reactivity. */
+    const EMBEDDED = (window.self !== window.top);
     const audioEl = document.getElementById('bg-audio');
-    audioEl.volume = 1.0;                         // full strength — gain controls output
     let audioCtx = null, analyser = null, audioBytes = null;
     let gainNode = null;
     let audioReady = false;
@@ -538,14 +660,10 @@
         analyser.fftSize = 128;
         analyser.smoothingTimeConstant = 0.85;
         gainNode = audioCtx.createGain();
-        gainNode.gain.value = 0.25;               // initial volume (matches slider default)
-
-        // route: source → analyser (full signal) → gain (volume) → destination
-        // analyser reads BEFORE gain so amplitude is volume-independent.
+        gainNode.gain.value = 0.25;
         src.connect(analyser);
         analyser.connect(gainNode);
         gainNode.connect(audioCtx.destination);
-
         audioBytes = new Uint8Array(analyser.frequencyBinCount);
         audioReady = true;
         window.__gain = gainNode;
@@ -555,25 +673,32 @@
     function tryPlay() {
       initAudio();
       audioCtx?.resume?.();
-      audioEl.play().catch(() => {/* will retry on user gesture below */});
+      audioEl.play().catch(() => {});
     }
-    // best-effort autoplay
-    tryPlay();
-    // any first user interaction will guarantee playback (browser policy)
-    const kickAudio = () => { tryPlay(); window.removeEventListener('pointerdown', kickAudio); window.removeEventListener('keydown', kickAudio); };
-    window.addEventListener('pointerdown', kickAudio, { passive: true });
-    window.addEventListener('keydown',     kickAudio, { passive: true });
 
-    // exposed so tick() can sample
+    if (EMBEDDED) {
+      // parent runs the show — hide our player, stay silent.
+      audioEl.muted = true;
+      const p = document.getElementById('music-player');
+      if (p) p.style.display = 'none';
+    } else {
+      audioEl.volume = 1.0;
+      tryPlay();
+      const kickAudio = () => { tryPlay(); window.removeEventListener('pointerdown', kickAudio); window.removeEventListener('keydown', kickAudio); };
+      window.addEventListener('pointerdown', kickAudio, { passive: true });
+      window.addEventListener('keydown',     kickAudio, { passive: true });
+    }
+
+    // exposed so tick() can sample. embedded → read parent-fed value.
     window.__audio = {
       getAmp() {
+        if (EMBEDDED) return window.__heroAmp || 0;
         if (!audioReady) return 0;
         analyser.getByteFrequencyData(audioBytes);
-        // average across the lower 2/3 of the spectrum (bass + mids)
         const N = Math.floor(audioBytes.length * 0.66);
         let s = 0;
         for (let i = 0; i < N; i++) s += audioBytes[i];
-        return s / (N * 255);  // normalized 0..1
+        return s / (N * 255);
       }
     };
 
@@ -676,16 +801,316 @@
       cooldown: 0.10,
     };
 
+    /* ══════════════════════════════════════════════════════════════════
+       GRENINJA WORLD — water/ninja theme. Everything here is built once
+       up-front but starts hidden; the tick + switchPokemon toggle it on
+       only while currentPokemon === 'greninja'. None of it renders or
+       updates for rayquaza.
+
+       Knobs (top of file feel): GREN_CYAN (rim/aura colour),
+       RAIN_COUNT (density), WET_RAMP (wet-glass ramp speed), and the
+       backdrop tint colours below.
+       ══════════════════════════════════════════════════════════════════ */
+    const GREN_CYAN  = new THREE.Color(0x33e0ff);   // aura / rim / rain tint knob
+    // rain density — scaled down on touch devices (mobile GPU budget)
+    const RAIN_COUNT = TOUCH_DEVICE ? 160 : 420;
+    const WET_RAMP   = 1.8;    // wetness units/sec ramp (uWet 0→1)
+
+    /* ── greninja backdrop: turbulent STORM SKY dome ──────────────────
+       Inverted sphere with layered fbm storm clouds (two parallax cloud
+       decks drifting at different speeds) over a moody desaturated
+       slate blue-grey gradient. A faint lighter break sits near the
+       horizon. uFlash (driven JS-side, greninja-only) briefly lifts the
+       whole sky on distant lightning. Hidden unless greninja is active.
+       Palette knobs: ZENITH/HORIZON/CLOUD_DARK/CLOUD_LIT below; cloud
+       drift speed via the `t` multipliers; flash colour via FLASH. */
+    let greninjaSkyMat = null;
+    {
+      const geo = new THREE.SphereGeometry(1400, 48, 32);
+      const mat = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        toneMapped: false,
+        uniforms: { uTime: { value: 0 }, uFlash: { value: 0 } },
+        vertexShader: /* glsl */`
+          varying vec3 vDir;
+          void main() {
+            vDir = normalize(position);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: /* glsl */`
+          varying vec3 vDir;
+          uniform float uTime;
+          uniform float uFlash;
+          float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+          float noise(vec3 p){
+            vec3 i = floor(p); vec3 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float n =
+              mix(mix(mix(hash(i + vec3(0,0,0)), hash(i + vec3(1,0,0)), f.x),
+                      mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+                  mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+                      mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+            return n;
+          }
+          float fbm(vec3 p){
+            float v = 0.0; float a = 0.5;
+            for (int i = 0; i < 6; i++){ v += a * noise(p); p = p * 2.02 + 11.3; a *= 0.5; }
+            return v;
+          }
+          void main(){
+            vec3 d = normalize(vDir);
+            float h = d.y;                       // -1 (down) .. 1 (up)
+            float t = uTime * 0.02;
+
+            // ── moody storm gradient ──────────────────────────────────
+            // desaturated slate blue-grey, darker overhead, a touch warmer
+            // /lighter toward the horizon (overcast light scatters low).
+            vec3 ZENITH  = vec3(0.020, 0.030, 0.052);   // dark slate overhead
+            vec3 HORIZON = vec3(0.090, 0.115, 0.150);   // pale slate at horizon
+            float hg = smoothstep(-0.15, 0.85, h);
+            vec3 base = mix(HORIZON, ZENITH, hg);
+            // subtle lighter break just above the horizon (gap in the storm)
+            float breakBand = smoothstep(0.18, 0.0, abs(h - 0.06));
+            base += vec3(0.05, 0.07, 0.09) * breakBand * 0.55;
+
+            // project the dome onto a domain that flattens overhead so the
+            // clouds read as a ceiling rather than radial spokes
+            vec3 q = d / max(0.30, d.y * 0.5 + 0.8);
+
+            // ── two parallax cloud decks ──────────────────────────────
+            // far deck: big slow masses; near deck: smaller, faster, with
+            // more contrast — gives depth + motion.
+            float far  = fbm(q * 1.6 + vec3( t*0.6, t*0.15, -t*0.4));
+            float near = fbm(q * 3.6 + vec3(-t*1.3, t*0.10,  t*0.9) + far*0.8);
+            // turbulence shapes the billows
+            float clouds = far*0.55 + near*0.55;
+            clouds = clouds*clouds;                       // crush midtones → billowy
+            float cover  = smoothstep(0.18, 0.95, clouds); // 0 sky .. 1 dense cloud
+
+            vec3 CLOUD_DARK = vec3(0.035, 0.050, 0.072);  // shadowed underside
+            vec3 CLOUD_LIT  = vec3(0.150, 0.180, 0.225);  // lit billow tops
+            // light comes from slightly above: lit where near-deck noise
+            // is high (catching the top of a billow)
+            float lit = smoothstep(0.35, 0.85, near);
+            vec3 cloudCol = mix(CLOUD_DARK, CLOUD_LIT, lit);
+
+            vec3 col = mix(base, cloudCol, cover * (0.55 + 0.45*hg));
+
+            // ── distant lightning flash ───────────────────────────────
+            // uFlash (0..1) briefly lifts brightness, brightest where the
+            // clouds are (back-lit) and toward the lower sky.
+            vec3 FLASH = vec3(0.55, 0.62, 0.80);
+            float flashShape = (0.4 + cover*0.9) * (0.5 + (1.0-hg)*0.7);
+            col += FLASH * uFlash * flashShape;
+
+            gl_FragColor = vec4(col, 1.0);
+          }`
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.renderOrder = -2;
+      mesh.visible = false;     // greninja-only
+      scene.add(mesh);
+      greninjaSkyMat = mat;
+      window.__greninjaSky = mesh;
+    }
+
+    /* ── greninja rain — layered downpour ─────────────────────────────
+       Dense vertical streaks as additive LineSegments (2 verts each).
+       Each streak is assigned a DEPTH in [0,1] (0 = far, 1 = near) that
+       drives, together:  fall speed, streak length, slant, horizontal
+       spread, and per-vertex brightness — so near streaks are fast,
+       long, bright and wide-spread while far streaks are slow, short,
+       faint and clustered toward the center. That depth correlation is
+       what reads as a real 3D downpour with parallax rather than a flat
+       sheet of identical dashes. A faint bright "head" on each streak
+       (top vertex brighter than the trailing bottom) gives a subtle
+       motion-blur/comet feel.
+
+       All positions are derived from a per-streak seed + `t` each frame
+       (no integration, no allocation, framerate-independent). Cool
+       desaturated blue-white, additive so it picks up a little bloom.
+       Hidden + not updated unless greninja is active. Count is scaled
+       down on TOUCH_DEVICE (RAIN_COUNT above).
+
+       Knobs: RAIN_COUNT (density), RAIN_R (column radius),
+       RAIN_LEN_* (streak length range), RAIN_SPEED_* (fall speed range),
+       RAIN_WIND (slant). */
+    const RAIN_H        = 90;    // full vertical span the rain recycles over
+    const RAIN_TOP      = 46;    // top of the volume relative to scene center
+    const RAIN_R        = 42;    // horizontal radius of the rain column (near)
+    const RAIN_LEN_MIN  = 1.6;   // far streaks: short
+    const RAIN_LEN_MAX  = 6.5;   // near streaks: long (motion-blur feel)
+    const RAIN_SPEED_MIN= 26;    // far streaks: slower
+    const RAIN_SPEED_MAX= 70;    // near streaks: fast
+    const RAIN_WIND     = 7.0;   // horizontal slant magnitude
+    let rainMesh = null, rainPos = null, rainCol = null, rainSeed = null;
+    {
+      const geo = new THREE.BufferGeometry();
+      rainPos  = new Float32Array(RAIN_COUNT * 2 * 3);   // 2 verts/streak
+      rainCol  = new Float32Array(RAIN_COUNT * 2 * 3);   // per-vertex colour
+      // per-streak seed: x-base, z-base, phase(0..1), depth(0..1)
+      rainSeed = new Float32Array(RAIN_COUNT * 4);
+      // cool blue-white base tint
+      const TR = 0.62, TG = 0.78, TB = 1.0;
+      for (let i = 0; i < RAIN_COUNT; i++) {
+        const depth = Math.random();                    // 0 far .. 1 near
+        // near streaks spread wider (more parallax); far cluster center
+        const spread = RAIN_R * (0.30 + 0.70 * depth);
+        const ang = Math.random() * Math.PI * 2;
+        const rad = Math.sqrt(Math.random()) * spread;
+        rainSeed[i*4+0] = Math.cos(ang) * rad;          // x
+        rainSeed[i*4+1] = Math.sin(ang) * rad * 0.55;   // z (flattened)
+        rainSeed[i*4+2] = Math.random();                // phase
+        rainSeed[i*4+3] = depth;
+        // brightness scales with depth; the streak HEAD (top vert) is
+        // brighter than the trailing tail for a comet/motion-blur look.
+        const b = (0.22 + depth * 0.85) * 0.5;          // overall brightness (dimmed for subtle rain)
+        const o = i * 6;
+        rainCol[o+0] = TR*b;      rainCol[o+1] = TG*b;      rainCol[o+2] = TB*b;      // head
+        rainCol[o+3] = TR*b*0.35; rainCol[o+4] = TG*b*0.35; rainCol[o+5] = TB*b*0.35; // tail
+      }
+      geo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+      geo.setAttribute('color',    new THREE.BufferAttribute(rainCol, 3));
+      const mat = new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.42,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      rainMesh = new THREE.LineSegments(geo, mat);
+      rainMesh.frustumCulled = false;
+      rainMesh.visible = false;     // greninja-only
+      scene.add(rainMesh);
+      window.__rain = rainMesh;
+    }
+    // advance the rain — called each frame ONLY while greninja is shown.
+    function updateRain(t) {
+      const cx = modelCenter.x, cy = modelCenter.y, cz = modelCenter.z;
+      const span = RAIN_H;
+      const pos = rainPos;
+      for (let i = 0; i < RAIN_COUNT; i++) {
+        const sx = rainSeed[i*4+0];
+        const sz = rainSeed[i*4+1];
+        const ph = rainSeed[i*4+2];
+        const dp = rainSeed[i*4+3];                     // depth 0..1
+        const sp  = RAIN_SPEED_MIN + (RAIN_SPEED_MAX - RAIN_SPEED_MIN) * dp;
+        const len = RAIN_LEN_MIN  + (RAIN_LEN_MAX  - RAIN_LEN_MIN ) * dp;
+        const fall = (ph * span + t * sp) % span;       // 0..span, recycles
+        const yTop = cy + RAIN_TOP - fall;              // streak head (top)
+        const yBot = yTop - len;                        // trailing tail
+        // consistent wind slant; near streaks slant a touch more
+        const dx = RAIN_WIND * (0.6 + dp * 0.6) * (len / RAIN_LEN_MAX);
+        const xTop = cx + sx;
+        const xBot = cx + sx + dx;
+        const o = i * 6;
+        pos[o+0] = xTop; pos[o+1] = yTop; pos[o+2] = cz + sz;
+        pos[o+3] = xBot; pos[o+4] = yBot; pos[o+5] = cz + sz;
+      }
+      rainMesh.geometry.attributes.position.needsUpdate = true;
+    }
+
+    /* ── greninja cyan key light + lighting swap ──────────────────────
+       Dedicated cool fill, only enabled while greninja is active. The
+       warm rayquaza key (sunLight) is dimmed + cooled and rimLight
+       boosted while greninja is shown; all three lerp smoothly toward a
+       per-pokemon target each frame so the toggle never flickers and
+       always settles back to the exact rayquaza baseline. */
+    const greninjaKey = new THREE.DirectionalLight(GREN_CYAN.getHex(), 0.0);
+    greninjaKey.position.set(-30, 40, 40);
+    scene.add(greninjaKey);
+
+    // baselines captured from the rayquaza setup above
+    const RAY_SUN_COLOR = sunLight.color.clone();
+    const RAY_SUN_INT   = sunLight.intensity;
+    const RAY_RIM_COLOR = rimLight.color.clone();
+    const RAY_RIM_INT   = rimLight.intensity;
+    const RAY_AMB_COLOR = ambLight.color.clone();
+
+    // greninja targets — cooler, dimmer warm key; punchier blue rim;
+    // cyan ambient; cyan fill light on.
+    const GRN_SUN_COLOR = new THREE.Color(0xbfe9ff);  // cool cyan-white
+    const GRN_SUN_INT   = 1.5;
+    const GRN_RIM_COLOR = new THREE.Color(0x4fd6ff);  // strong aqua rim
+    const GRN_RIM_INT   = 1.6;
+    const GRN_AMB_COLOR = new THREE.Color(0x16384a);  // teal ambient
+    const GRN_KEY_INT   = 1.1;
+
+    const _lc = new THREE.Color();
+    // lerp the scene lighting toward the active pokemon's target. Called
+    // every frame; converges fast but smoothly (no pop on switch).
+    function updateLighting() {
+      const gren = currentPokemon === 'greninja';
+      const s = 0.12;   // lerp factor
+      sunLight.color.lerp(gren ? GRN_SUN_COLOR : RAY_SUN_COLOR, s);
+      sunLight.intensity += ((gren ? GRN_SUN_INT : RAY_SUN_INT) - sunLight.intensity) * s;
+      rimLight.color.lerp(gren ? GRN_RIM_COLOR : RAY_RIM_COLOR, s);
+      rimLight.intensity += ((gren ? GRN_RIM_INT : RAY_RIM_INT) - rimLight.intensity) * s;
+      ambLight.color.lerp(gren ? GRN_AMB_COLOR : RAY_AMB_COLOR, s);
+      greninjaKey.intensity += ((gren ? GRN_KEY_INT : 0.0) - greninjaKey.intensity) * s;
+    }
+
+    /* ── greninja cyan fresnel rim (aura) ──────────────────────────────
+       Injected into the greninja model's standard/physical materials via
+       onBeforeCompile so skinning still works. Adds an additive cyan rim
+       on the silhouette: cyan * pow(1 - dot(viewDir, normal), p) * uRimI.
+       uRimI is shared across all the model's materials and animated
+       (subtle pulse) only while greninja is active; set to 0 otherwise. */
+    const greninjaRim = { intensity: { value: 0.0 } };   // shared uniform object
+    function installGreninjaRim(root) {
+      root.traverse(o => {
+        if (!(o.isMesh || o.isSkinnedMesh) || !o.material) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        mats.forEach(m => {
+          if (!('onBeforeCompile' in m) || m.userData.__rimInstalled) return;
+          m.userData.__rimInstalled = true;
+          const prev = m.onBeforeCompile;
+          m.onBeforeCompile = (shader) => {
+            if (prev) prev(shader);
+            shader.uniforms.uRimColor = { value: GREN_CYAN };
+            shader.uniforms.uRimI     = greninjaRim.intensity;
+            // declare a global accumulator + compute the fresnel where the
+            // geometric `normal` and `vViewPosition` are both in scope
+            // (right after normal setup, inside the lit pipeline), then add
+            // it at the very end. Doing the read here avoids the end-of-
+            // shader scope where those vars may be optimised away.
+            shader.fragmentShader = shader.fragmentShader.replace(
+              '#include <common>',
+              `#include <common>
+               vec3 gRimAccum = vec3(0.0);`
+            ).replace(
+              '#include <normal_fragment_maps>',
+              `#include <normal_fragment_maps>
+               {
+                 vec3 vd = normalize(vViewPosition);
+                 float fres = pow(1.0 - clamp(dot(vd, normalize(normal)), 0.0, 1.0), 2.5);
+                 gRimAccum = uRimColor * fres * uRimI;
+               }`
+            ).replace(
+              '#include <dithering_fragment>',
+              `#include <dithering_fragment>
+               gl_FragColor.rgb += gRimAccum;`
+            );
+          };
+          m.needsUpdate = true;
+        });
+      });
+    }
+
     /* ── post-processing: bloom + ACES tone mapping ───────────────── */
     // Use the default composer targets and bump samples on them — this
     // is more reliable across pixel-ratio combinations than supplying
     // a custom render target. The defaults are HDR-friendly and resize
     // correctly with composer.setSize().
     const composer = new EffectComposer(renderer);
-    composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP));
     composer.setSize(window.innerWidth, window.innerHeight);
-    composer.renderTarget1.samples = 4;
-    composer.renderTarget2.samples = 4;
+    // MSAA: 4x on desktop, 0 on touch (mobile GPUs choke on multisampled
+    // HDR targets + bloom; DPR cap already keeps edges acceptable).
+    const MSAA = TOUCH_DEVICE ? 0 : 4;
+    composer.renderTarget1.samples = MSAA;
+    composer.renderTarget2.samples = MSAA;
     composer.renderTarget1.texture.type = THREE.HalfFloatType;
     composer.renderTarget2.texture.type = THREE.HalfFloatType;
     composer.addPass(new RenderPass(scene, camera));
@@ -693,12 +1118,114 @@
     // only the bright env-driven highlights bloom; starfield + glass
     // stay clean.
     const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      new THREE.Vector2(window.innerWidth, window.innerHeight),  // full-res — quality
       0.55,   // strength
       0.40,   // radius
       1.05    // threshold (only HDR-ish brights pass)
     );
     composer.addPass(bloomPass);
+
+    /* ── RAIN-ON-GLASS (fullscreen post-process) ───────────────────────
+       Refracts the whole composited image as if seen through a rain-
+       covered pane of glass: layered droplets bead and roll down leaving
+       residual-bead trails, each drop acts as a lens (gradient-of-height
+       refraction that bends + magnifies the scene behind it), and the dry
+       glass is softly fogged. Driven by uWet (synced from pkWet each
+       frame): ramps in for Greninja, a true no-op for Rayquaza.
+       Original clean-room implementation of the well-known stateless
+       wet-window technique. */
+    const RainShader = {
+      uniforms: {
+        tDiffuse:    { value: null },               // auto-filled by ShaderPass
+        iResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+        iTime:       { value: 0 },
+        uWet:        { value: 0 },
+      },
+      vertexShader: `varying vec2 vUv;
+        void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+      fragmentShader: `
+        precision highp float;
+        uniform sampler2D tDiffuse;
+        uniform vec2  iResolution;
+        uniform float iTime;
+        uniform float uWet;
+        varying vec2  vUv;
+
+        const float DROP_SPEED  = 0.42;
+        const float REFRACT     = 0.05;
+        const float BLUR_AMT    = 0.0;
+
+        float hash11(float p){ p=fract(p*0.1031); p*=p+33.33; p*=p+p; return fract(p); }
+        vec3  hash31(float p){ vec3 q=fract(vec3(p)*vec3(.1031,.1030,.0973));
+          q+=dot(q,q.yzx+33.33); return fract((q.xxy+q.yzz)*q.zyx); }
+        float S(float a,float b,float t){ return smoothstep(a,b,t); }
+        float Saw(float b,float t){ return S(0.,b,t)*S(1.,b,t); }
+
+        // one layer of rolling drops + trails → (height, clarity)
+        vec2 dropLayer(vec2 uv, float t){
+          vec2 grid = vec2(6.0, 1.0);
+          uv.y += t * DROP_SPEED;
+          vec2 id = floor(uv*grid);
+          vec3 n  = hash31(id.x*35.2 + id.y*2376.1);
+          vec2 st = fract(uv*grid) - vec2(0.5, 0.0);
+          float ti = fract(t*(0.5+n.z*0.5) + n.z);
+          float y  = (Saw(0.85, ti)-0.5)*0.9 + 0.5;
+          float x  = n.x - 0.5;
+          x += sin(y + sin(y))*(0.5-abs(x))*(n.z-0.5);
+          vec2 p = vec2(x, y);
+          float d = length((st-p)*grid.yx);
+          float mainDrop = S(0.4, 0.0, d);
+          float r  = sqrt(S(1.0, y, st.y));
+          float cd = abs(st.x - x);
+          float trail = S(0.23*r, 0.15*r*r, cd) * S(-0.02, 0.02, st.y - y);
+          float droplets = max(0.0, (sin(st.y*(1.0-st.y)*120.0) - st.y)) * trail * n.z;
+          float m = mainDrop + droplets*r*mainDrop;
+          return vec2(m, max(mainDrop, droplets*0.5));
+        }
+        vec2 getDrops(vec2 uv, float t){
+          vec2 c = vec2(0.0);
+          c += dropLayer(uv*1.0, t);
+          c += dropLayer(uv*1.85 + 7.7, t*1.3);
+          vec2 sid = fract(uv*30.0);
+          vec3 sn  = hash31(dot(floor(uv*30.0), vec2(7.0,113.0)));
+          float stat = S(0.3,0.0, length(sid-0.5)) * Saw(0.025, fract(t*0.3+sn.z));
+          c += vec2(stat*0.6);
+          return c;
+        }
+
+        void main(){
+          vec2 uv = vUv;
+          if (uWet <= 0.001){ gl_FragColor = texture2D(tDiffuse, uv); return; }  // no-op (rayquaza)
+          vec2 asp = vec2(iResolution.x/iResolution.y, 1.0);
+          vec2 guv = (uv-0.5)*asp + 0.5;
+          float t  = iTime;
+
+          vec2  c    = getDrops(guv, t);
+          float e    = 1.5/iResolution.y;
+          float hx   = getDrops(guv+vec2(e,0.0), t).x;
+          float hy   = getDrops(guv+vec2(0.0,e), t).x;
+          vec2  grad = vec2(hx - c.x, hy - c.x);
+          vec2  refr = uv - grad*REFRACT*uWet;
+
+          float clarity = clamp(c.y, 0.0, 1.0);
+          // sample the scene SHARP (only the tiny refraction offset) — no blur
+          // sampling, no darkening, so the view stays clear behind the glass.
+          vec3 col = texture2D(tDiffuse, refr).rgb;
+
+          float glint = pow(clamp(grad.y*-6.0,0.0,1.0), 2.0) * clarity;
+          col += glint*0.28*uWet;   // bright beads so droplets still read on the glass
+
+          vec3 dry = texture2D(tDiffuse, uv).rgb;
+          // droplets/glints are visible on the letters, but refraction+blur
+          // are kept low (consts above) so the wet pass doesn't smear or
+          // block the text + greninja behind it.
+          gl_FragColor = vec4(mix(dry, col, uWet * 0.75), 1.0);
+        }`,
+    };
+    const rainPass = new ShaderPass(RainShader);
+    rainPass.enabled = false;   // flipped on once uWet > 0 (greninja)
+    composer.addPass(rainPass);
+
     // OutputPass applies ACES Filmic at the END so bloom is computed in
     // linear and only tone-mapped once.
     composer.addPass(new OutputPass());
@@ -718,6 +1245,173 @@
 
     // (debug cube removed — we now know the model renders at its skeleton
     // center; the camera orbits around that instead of origin.)
+
+    /* ── wet-glass uniforms for the pk text (greninja only) ───────────
+       uWet ramps 0→1 when greninja is active, 1→0 (fully dry, original
+       glass) for rayquaza. The shader injection perturbs the surface
+       normal with a downward-drifting droplet/rivulet field and adds
+       bright specular speckles where droplets sit — refraction wobbles
+       and light beads on the letters. uWet=0 is a no-op so rayquaza's
+       glass (and the lightning glassCharge optical modulation, which
+       mutates roughness/clearcoat/iridescence/dispersion on the SAME
+       material) is completely unchanged. The two coexist because the wet
+       effect lives entirely inside the compiled shader behind uWet, while
+       glassCharge only touches JS material properties — different layers,
+       no shared state. */
+    const pkWet = { uWet: { value: 0.0 }, uTime: { value: 0.0 } };
+    function installWetGlass(mat) {
+      // DISABLED: the per-letter material droplet hack read poorly and now
+      // conflicts with the fullscreen rain-on-glass post-process (which
+      // covers the letters too, more convincingly). Left as a no-op so the
+      // glass material stays pristine. Re-enable by removing this return.
+      return;
+      if (mat.userData.__wetInstalled) return;
+      mat.userData.__wetInstalled = true;
+      const prev = mat.onBeforeCompile;
+      mat.onBeforeCompile = (shader) => {
+        if (prev) prev(shader);
+        shader.uniforms.uWet  = pkWet.uWet;
+        shader.uniforms.uTime = pkWet.uTime;
+        // droplet field helpers + a normal perturbation, injected before
+        // lighting so the wobble affects reflection/refraction. Object-
+        // space position (vWetPos) gives a stable UV that rolls downward.
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <common>',
+          `#include <common>
+           varying vec3 vWetPos;`
+        ).replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+           vWetPos = position;`
+        );
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <common>',
+          `#include <common>
+           varying vec3 vWetPos;
+           uniform float uWet;
+           uniform float uTime;
+           // ── rain-on-glass droplet field — adapted from "Heartfelt" by
+           //    Martijn Steinrucken / BigWIngs (Shadertoy ltffzl,
+           //    CC BY-NC-SA 3.0), ported to object-space on the letters.
+           //    Produces big drops that TRICKLE downward leaving thin
+           //    rivulet trails dotted with small droplets, plus a field of
+           //    static beads. Returns vec2(height, trailMask): height is
+           //    the wet "thickness" used for the refraction normal; the
+           //    combined value also drives the bright specular beads. ──
+           float whS(float t){ return fract(sin(t*12345.564)*7658.76); }   // N
+           vec3 whS3(float p){                                             // N13
+             vec3 p3 = fract(vec3(p) * vec3(.1031,.11369,.13787));
+             p3 += dot(p3, p3.yzx + 19.19);
+             return fract(vec3((p3.x+p3.y)*p3.z, (p3.x+p3.z)*p3.y, (p3.y+p3.z)*p3.x));
+           }
+           float wSaw(float b, float t){ return smoothstep(0.,b,t)*smoothstep(1.,b,t); }
+           #define wS(a,b,t) smoothstep(a,b,t)
+           // falling drops + trails (Heartfelt DropLayer2)
+           vec2 dropLayer2(vec2 uv, float t){
+             vec2 UV = uv;
+             uv.y += t*0.75;
+             vec2 a = vec2(6., 1.);
+             vec2 grid = a*2.;
+             vec2 id = floor(uv*grid);
+             float colShift = whS(id.x);
+             uv.y += colShift;
+             id = floor(uv*grid);
+             vec3 n = whS3(id.x*35.2+id.y*2376.1);
+             vec2 st = fract(uv*grid)-vec2(.5,0);
+             float x = n.x-.5;
+             float y = UV.y*20.;
+             float wiggle = sin(y+sin(y));
+             x += wiggle*(.5-abs(x))*(n.z-.5);
+             x *= .7;
+             float ti = fract(t+n.z);
+             y = (wSaw(.85,ti)-.5)*.9+.5;
+             vec2 p = vec2(x,y);
+             float d = length((st-p)*a.yx);
+             float mainDrop = wS(.4,.0,d);
+             float r = sqrt(wS(1.,y,st.y));
+             float cd = abs(st.x-x);
+             float trail = wS(.23*r,.15*r*r,cd);
+             float trailFront = wS(-.02,.02,st.y-y);
+             trail *= trailFront*r*r;
+             y = UV.y;
+             float trail2 = wS(.2*r,.0,cd);
+             float droplets = max(0.,(sin(y*(1.-y)*120.)-st.y))*trail2*trailFront*n.z;
+             y = fract(y*10.)+(st.y-.5);
+             float dd = length(st-vec2(x,y));
+             droplets = wS(.3,0.,dd);
+             float m = mainDrop+droplets*r*trailFront;
+             return vec2(m, trail);
+           }
+           // static beads clinging to the glass (Heartfelt StaticDrops)
+           float staticDrops(vec2 uv, float t){
+             uv *= 40.;
+             vec2 id = floor(uv);
+             uv = fract(uv)-.5;
+             vec3 n = whS3(id.x*107.45+id.y*3543.654);
+             vec2 p = (n.xy-.5)*.7;
+             float d = length(uv-p);
+             float fade = wSaw(.025, fract(t+n.z));
+             return wS(.3,0.,d)*fract(n.z*10.)*fade;
+           }
+           // combine static beads + two falling-drop layers (Heartfelt Drops)
+           vec2 dropField(vec2 uv, float t){
+             float s = staticDrops(uv, t)*0.55;
+             vec2 m1 = dropLayer2(uv, t)*0.95;
+             vec2 m2 = dropLayer2(uv*1.85, t)*0.55;
+             float c = s+m1.x+m2.x;
+             c = wS(.3,1.,c);
+             return vec2(c, max(m1.y, m2.y));
+           }`
+        );
+        // perturb the normal right after it's established. wetMask is
+        // declared at <common> scope (a global in the fragment main) so
+        // later includes can read it. We compute it here.
+        shader.fragmentShader = shader.fragmentShader.replace(
+          'varying vec3 vWetPos;',
+          `varying vec3 vWetPos;
+           float wetMask = 0.0;`
+        );
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <normal_fragment_maps>',
+          `#include <normal_fragment_maps>
+           if (uWet > 0.001) {
+             // object-space UV over the letter face; scaled so drops read
+             // at a believable physical size on the glyph surface.
+             vec2 wuv = vWetPos.xy * 0.075 + vec2(0.5, 0.5);
+             float tt = uTime * 0.30;
+             vec2 fld = dropField(wuv, tt);
+             float height = fld.x;          // wet thickness (drops + trails)
+             wetMask = clamp(height + fld.y*0.6, 0.0, 1.0);
+             // finite-difference gradient of the height field → refraction
+             // wobble. Drops sit ON the surface and bend the view through
+             // them; gravity already lives in the field's downward motion.
+             float e = 0.0015;
+             float hx = dropField(wuv+vec2(e,0.), tt).x - dropField(wuv-vec2(e,0.), tt).x;
+             float hy = dropField(wuv+vec2(0.,e), tt).x - dropField(wuv-vec2(0.,e), tt).x;
+             vec3 wob = vec3(-hx, -hy, 0.0) * (0.9/e) * 0.012 * uWet;
+             normal = normalize(normal + wob);
+           }`
+        );
+        // wet surface reads sharper/glossier (lower roughness) where the
+        // water film sits — applied after roughnessFactor is established.
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <roughnessmap_fragment>',
+          `#include <roughnessmap_fragment>
+           roughnessFactor = mix(roughnessFactor, roughnessFactor * 0.18, uWet * wetMask);`
+        );
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <dithering_fragment>',
+          `#include <dithering_fragment>
+           // bright beaded specular highlight catching on the drops — a
+           // tight hot core plus a softer halo so beads read as glossy
+           // water rather than flat speckle.
+           float bead = uWet * wetMask;
+           gl_FragColor.rgb += vec3(0.70, 0.85, 1.0) * pow(bead, 2.2) * 0.85
+                             + vec3(0.30, 0.45, 0.62) * bead * 0.30;`
+        );
+      };
+      mat.needsUpdate = true;
+    }
 
     /* ── pk logo (loaded in parallel with model) ──────────────────── */
     let pkText = null;
@@ -772,6 +1466,7 @@
           transparent: true,
           side: THREE.DoubleSide
         });
+        installWetGlass(mat);   // wet-glass shader (inert until uWet > 0)
         pkText = new THREE.Mesh(geo, mat);
         if (model) pkText.position.copy(modelCenter);
         scene.add(pkText);
@@ -784,6 +1479,50 @@
     let jaw         = null;
     let arms        = { L: [], R: [] };
     let modelCenter = new THREE.Vector3();
+
+    /* ── pokemon switching state ───────────────────────────────────────
+       `currentPokemon` gates which animation system runs each frame:
+         'rayquaza' → procedural bone undulation + cry (the original rig)
+         'greninja' → THREE.AnimationMixer playing a baked GLB clip
+       Only one model is in the scene at a time; the other is removed
+       (and its GPU resources disposed) on switch. Greninja is lazy-loaded
+       on first toggle so initial page load only pays for Rayquaza. */
+    let currentPokemon = 'rayquaza';
+    let greninjaModel  = null;     // gltf.scene once loaded
+    let greninjaMixer  = null;     // THREE.AnimationMixer for the baked clip
+    let greninjaLoading = false;
+    let switching       = false;   // guards re-entrant clicks during a swap
+
+    // Greninja framing — easy-to-tweak knobs. The model is auto-fit at
+    // load time so it occupies GRENINJA_TARGET_SIZE world units (matching
+    // Rayquaza's visual footprint in front of the camera); these offsets
+    // then nudge it into the same pocket between the "pk" letters.
+    const GRENINJA_TARGET_SIZE = 15;   // longest bbox dimension, world units
+                                       // (Rayquaza measures ~21.5; Greninja is
+                                       // humanoid/compact so it reads big — keep
+                                       // its longest dim a touch under Rayquaza's)
+    const GRENINJA_Y_OFFSET    = 0;    // centered in the gap (was -2, sat low)
+    const GRENINJA_X_OFFSET    = 0;    // just left of the slight-right nudge, near the "pk" center
+    const GRENINJA_Z_OFFSET    = 0;
+    const GRENINJA_CLIP        = 'pm0725_51_00_20001_battlewait01_loop'; // idle loop
+
+    // dispose helper — frees geometries + materials (+ their textures) for
+    // a subtree so repeated switching doesn't leak GPU memory.
+    function disposeObject(root) {
+      root.traverse(o => {
+        if (o.isMesh || o.isSkinnedMesh) {
+          o.geometry?.dispose?.();
+          const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+          mats.forEach(m => {
+            for (const key in m) {
+              const val = m[key];
+              if (val && val.isTexture) val.dispose();
+            }
+            m.dispose?.();
+          });
+        }
+      });
+    }
 
     new GLTFLoader().load('rayquaza/rayquaza.glb',
       (gltf) => {
@@ -874,10 +1613,137 @@
         });
 
         log(`loaded · chain ${bodyChain.length} (head→tail) · arms ${arms.L.length+arms.R.length} · jaw ${jaw?'y':'n'}`);
+
+        // warm up: compile all materials + run one full composer pass so
+        // every shader (incl. bloom's render-target programs) is linked
+        // up front. Without this the FIRST visible frame stalls on
+        // shader-link — the main cause of the resume hitch.
+        try {
+          renderer.compile(scene, camera);
+          composer.render();
+        } catch (e) {}
       },
       undefined,
       (err) => log('load error: ' + (err.message || err))
     );
+
+    /* ── greninja: lazy load + mixer setup ─────────────────────────────
+       Loaded on first switch. Auto-fit so it matches Rayquaza's footprint,
+       recentred on `modelCenter`, and driven by an AnimationMixer playing
+       its baked idle clip (advanced with delta time in tick()). */
+    function loadGreninja() {
+      return new Promise((resolve, reject) => {
+        if (greninjaModel) { resolve(greninjaModel); return; }
+        new GLTFLoader().load('pokemon/mega_greninja_za.glb',
+          (gltf) => {
+            const g = gltf.scene;
+
+            // auto-fit: scale so the longest bbox dimension == target size.
+            g.updateMatrixWorld(true);
+            const box  = new THREE.Box3().setFromObject(g);
+            const size = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z) || 1;
+            const s = GRENINJA_TARGET_SIZE / maxDim;
+            g.scale.setScalar(s);
+
+            // recompute box after scaling, then translate so its center
+            // sits at the world origin used for framing, plus offsets.
+            g.updateMatrixWorld(true);
+            const box2    = new THREE.Box3().setFromObject(g);
+            const center2 = box2.getCenter(new THREE.Vector3());
+            // center the model on the same world point the camera frames
+            // (Rayquaza's bone-derived center), not raw origin.
+            g.position.sub(center2).add(modelCenter);
+            g.userData.basePos = g.position.clone();   // baseline for idle drift
+
+            // material tweak — same env lift treatment as Rayquaza so it
+            // doesn't crush to black against the dark scene.
+            g.traverse(o => {
+              if (o.isMesh && o.material) {
+                const mats = Array.isArray(o.material) ? o.material : [o.material];
+                mats.forEach(m => {
+                  if ('envMapIntensity' in m) m.envMapIntensity = 1.6;
+                });
+              }
+            });
+
+            // mixer + baked clip. Prefer the named idle loop; fall back to
+            // the first available clip if the name ever changes.
+            greninjaMixer = new THREE.AnimationMixer(g);
+            const clip =
+              THREE.AnimationClip.findByName(gltf.animations, GRENINJA_CLIP)
+              || gltf.animations[0];
+            if (clip) {
+              const action = greninjaMixer.clipAction(clip);
+              action.setLoop(THREE.LoopRepeat, Infinity);
+              action.play();
+            }
+            log(`greninja loaded · scale ${s.toFixed(3)} · clip ${clip ? clip.name : 'none'} · ${gltf.animations.length} clips`);
+
+            greninjaModel = g;
+            resolve(g);
+          },
+          undefined,
+          (err) => { greninjaLoading = false; reject(err); }
+        );
+      });
+    }
+
+    /* ── switch model ──────────────────────────────────────────────── */
+    const pokeBtn  = document.getElementById('poke-toggle');
+    const pokeName = document.getElementById('poke-name');
+
+    async function switchPokemon() {
+      if (switching) return;
+      const next = currentPokemon === 'rayquaza' ? 'greninja' : 'rayquaza';
+      switching = true;
+      if (pokeBtn) pokeBtn.disabled = true;
+
+      try {
+        if (next === 'greninja') {
+          if (pokeName) pokeName.textContent = greninjaModel ? 'greninja' : 'loading…';
+          await loadGreninja();
+          if (model) scene.remove(model);            // pull rayquaza out
+          greninjaModel.position.copy(greninjaModel.userData.basePos);
+          greninjaModel.position.x += GRENINJA_X_OFFSET;
+          greninjaModel.position.y += GRENINJA_Y_OFFSET;
+          greninjaModel.position.z += GRENINJA_Z_OFFSET;
+          scene.add(greninjaModel);
+          installGreninjaRim(greninjaModel);          // cyan fresnel aura
+          currentPokemon = 'greninja';
+          if (pokeName) pokeName.textContent = 'greninja';
+          // swap the WORLD: cosmic → rainy water scene
+          if (window.__nebulaMesh)  window.__nebulaMesh.visible  = false;
+          if (window.__starfield)   window.__starfield.visible   = false;
+          if (window.__greninjaSky) window.__greninjaSky.visible = true;
+          if (rainMesh)             rainMesh.visible              = true;
+          // first storm flash a few seconds in; clear any stale flash
+          window.__stormFlash = 0;
+          window.__stormNextT = clock.getElapsedTime() + 2.5;
+          window.__stormLastT = clock.getElapsedTime();
+          if (greninjaSkyMat) greninjaSkyMat.uniforms.uFlash.value = 0;
+          scene.fog = new THREE.FogExp2(0x10161f, 0.0040);   // cool slate storm haze
+        } else {
+          if (greninjaModel) scene.remove(greninjaModel);
+          if (model) scene.add(model);
+          currentPokemon = 'rayquaza';
+          if (pokeName) pokeName.textContent = 'rayquaza';
+          // restore the cosmic world
+          if (window.__nebulaMesh)  window.__nebulaMesh.visible  = true;
+          if (window.__starfield)   window.__starfield.visible   = true;
+          if (window.__greninjaSky) window.__greninjaSky.visible = false;
+          if (rainMesh)             rainMesh.visible              = false;
+          scene.fog = null;
+        }
+      } catch (e) {
+        log('greninja load failed: ' + (e.message || e));
+        if (pokeName) pokeName.textContent = currentPokemon;
+      } finally {
+        switching = false;
+        if (pokeBtn) pokeBtn.disabled = false;
+      }
+    }
+    if (pokeBtn) pokeBtn.addEventListener('click', switchPokemon);
 
     /* ── resize ───────────────────────────────────────────────────── */
     window.addEventListener('resize', () => {
@@ -885,43 +1751,103 @@
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
       composer.setSize(window.innerWidth, window.innerHeight);
-      bloomPass.setSize(window.innerWidth, window.innerHeight);
+      bloomPass.setSize(window.innerWidth, window.innerHeight);   // full-res
+      rainPass.uniforms.iResolution.value.set(window.innerWidth, window.innerHeight);
     });
 
     /* ── animate ──────────────────────────────────────────────────── */
     const clock = new THREE.Clock();
     const tmpLookAt = new THREE.Vector3();
 
-    // (#1) parent posts {__heroAction:'pause'|'resume'} when the hero
-    // section enters/leaves the viewport. Pausing skips the rAF render
-    // entirely and suspends the audio context — drops GPU + audio cost
-    // to zero while the user is reading the rest of the page.
-    let isPaused = false;
+    // (#1) parent posts {__heroAction:'pause'|'throttle'|'resume'}:
+    //   pause    → fully off-screen: stop rendering entirely.
+    //   throttle → actively scrolling: keep animating but at a low fps so
+    //              the main thread has room for smooth scroll (NO freeze).
+    //   resume   → idle + visible: full framerate.
+    // renderMode drives the tick's frame-gating below.
+    let renderMode = 'resume';
+    let lastFrameT = 0;
     window.addEventListener('message', (e) => {
       const action = e.data && e.data.__heroAction;
-      if (action === 'pause') {
-        isPaused = true;
-        if (audioCtx && audioCtx.state === 'running') audioCtx.suspend();
-        if (audioEl && !audioEl.paused) audioEl.pause();
-      } else if (action === 'resume') {
-        isPaused = false;
-        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-        if (audioEl && audioEl.paused) audioEl.play().catch(() => {});
+      if (action === 'pause' || action === 'throttle' || action === 'resume') {
+        renderMode = action;
       }
     });
 
-    function tick() {
+    function tick(now) {
       requestAnimationFrame(tick);
-      if (isPaused) return;     // skip render + animation while off-screen
+      now = now || 0;
+      // frame-gating per mode. NOTE: 'pause' is a TRICKLE (~5fps), not a
+      // hard stop — keeps the WebGL shaders warm and the compositor layer
+      // promoted, so scrolling BACK to the hero resumes instantly instead
+      // of hitching on shader-recompile + layer re-promotion.
+      if (renderMode === 'pause')    { if (now - lastFrameT < 200) return; }  // ~5fps
+      else if (renderMode === 'throttle') { if (now - lastFrameT < 48) return; } // ~20fps
+      lastFrameT = now;
       const t = clock.getElapsedTime();
+      // mixer delta — independent of window.__lastT (which the lightning
+      // block also uses). clamped so a tab-resume / throttle gap doesn't
+      // fast-forward the baked clip by seconds.
+      const mixDt = Math.min(0.05, t - (window.__mixerLastT ?? t));
+      window.__mixerLastT = t;
 
       // sample audio amplitude once per frame, share across reactives
       const amp = window.__audio ? window.__audio.getAmp() : 0;
 
-      // nebula noise time + pulse uniform
+      const isGreninja = (currentPokemon === 'greninja');
+
+      // nebula noise time + pulse uniform (cosmic = rayquaza). The cloud
+      // band fades out for greninja so nothing leaks if the nebula is
+      // ever momentarily visible mid-switch.
       if (window.__nebulaMat) {
         window.__nebulaMat.uniforms.uTime.value  = t;
         window.__nebulaMat.uniforms.uPulse.value = amp;
+        const cloudTarget = isGreninja ? 0 : 1;
+        const u = window.__nebulaMat.uniforms.uCloud;
+        u.value += (cloudTarget - u.value) * 0.1;
+      }
+
+      // ── greninja world per-frame (only while active) ──────────────
+      // lerp the scene lighting toward the active look every frame
+      updateLighting();
+      // wet-glass ramp on the pk text: up for greninja, down for rayquaza
+      pkWet.uTime.value = t;
+      {
+        const wetTarget = isGreninja ? 1 : 0;
+        const dtWet = Math.min(0.05, t - (window.__wetLastT ?? t));
+        window.__wetLastT = t;
+        const w = pkWet.uWet;
+        w.value += Math.sign(wetTarget - w.value) * Math.min(Math.abs(wetTarget - w.value), WET_RAMP * dtWet);
+      }
+      // drive the fullscreen rain-on-glass pass from the same wetness;
+      // enabled only while wet so rayquaza skips the pass entirely.
+      rainPass.uniforms.uWet.value  = pkWet.uWet.value;
+      rainPass.uniforms.iTime.value = t;
+      rainPass.enabled = pkWet.uWet.value > 0.002;
+      if (isGreninja) {
+        if (greninjaSkyMat) {
+          greninjaSkyMat.uniforms.uTime.value = t;
+          // distant storm-lightning flicker: occasionally kick a flash
+          // that decays out; sometimes a quick double-strike. Driven by
+          // `t` deltas so it's framerate-independent. greninja-only.
+          const dtF = Math.min(0.05, t - (window.__stormLastT ?? t));
+          window.__stormLastT = t;
+          let f = window.__stormFlash ?? 0;
+          f = Math.max(0, f - dtF * 4.5);                 // fast decay
+          if ((t - (window.__stormNextT ?? 0)) > 0) {
+            f = 0.6 + Math.random() * 0.5;                // strike
+            // schedule next strike 3–9s out; small chance of a quick re-flash
+            window.__stormNextT = t + (Math.random() < 0.3 ? 0.12 : 3 + Math.random() * 6);
+          }
+          window.__stormFlash = f;
+          greninjaSkyMat.uniforms.uFlash.value = f;
+        }
+        if (rainMesh && rainMesh.visible) updateRain(t);
+        // cyan aura: strong fresnel rim with a subtle breathing pulse,
+        // reacts a touch to audio. Tweak the 1.1 base for more/less glow.
+        greninjaRim.intensity.value = 1.1 + Math.sin(t * 1.6) * 0.3 + amp * 0.5;
+      } else {
+        greninjaRim.intensity.value = 0;
       }
 
       // lightning lifecycle + audio-reactive trigger
@@ -941,7 +1867,9 @@
         // trigger: amp peaks above threshold, with cooldown.
         // music-driven strikes are kept rare so the scene doesn't
         // pile up into solid white; ambient trickle stays as-is.
-        const ready = (t - L.lastStrikeT) > L.cooldown;
+        // rayquaza-only: no new strikes while greninja is shown (existing
+        // bolts still decay out above, so the toggle leaves no artifacts).
+        const ready = !isGreninja && (t - L.lastStrikeT) > L.cooldown;
         const ampTrigger     = ready && amp > 0.30 && Math.random() < 0.55;
         const ambientTrigger = ready && Math.random() < 0.025;
         if (ampTrigger || ambientTrigger) {
@@ -981,7 +1909,33 @@
       }
       window.__lastT = t;
 
-      if (model) {
+      // greninja: advance the baked clip + a gentle idle drift. Runs ONLY
+      // while greninja is the shown pokemon; rayquaza's procedural block
+      // below is skipped in that case.
+      if (currentPokemon === 'greninja' && greninjaModel) {
+        if (greninjaMixer) greninjaMixer.update(mixDt);
+        const b = greninjaModel.userData.basePos;
+        if (b) {
+          greninjaModel.position.x = b.x + GRENINJA_X_OFFSET + Math.sin(t * 0.21 + 0.5) * 0.4;
+          greninjaModel.position.y = b.y + GRENINJA_Y_OFFSET + Math.sin(t * 0.32) * 0.3;
+          greninjaModel.position.z = b.z + GRENINJA_Z_OFFSET;
+          greninjaModel.rotation.y = Math.sin(t * 0.17) * 0.12;
+        }
+      }
+
+      if (currentPokemon === 'rayquaza' && model) {
+        // handle a forwarded click: raycast against the model; on a hit,
+        // play the cry through the parent + kick the jaw-flare reaction.
+        if (window.__heroClick) {
+          const c = window.__heroClick; window.__heroClick = null;
+          raycaster.setFromCamera({ x: c.x, y: c.y }, camera);
+          const hits = raycaster.intersectObject(model, true);
+          if (hits.length) {
+            cryT = t;
+            try { window.parent && window.parent.__playCry && window.parent.__playCry(); } catch (e) {}
+          }
+        }
+
         /* full-body traveling wave + layered motion. wave travels
            head→tail (-k*i), amplitude grows toward the tip. Two
            harmonics overlaid for organic feel. Lateral (Y) is the main
@@ -999,6 +1953,32 @@
         const xBase    = 0.05;
         const xTip     = 0.18;
 
+        /* ── CRY SPASM intensity (0..1) ───────────────────────────────
+           Drives the whole-body convulsion that overrides the calm idle
+           undulation during the screech. Must match the cry timing used
+           by the BALLISTIC SCREECH block below (CRY_DUR / since). Shaped
+           so it builds at the scream onset, rides the real audio loudness
+           through the sustain, then eases cleanly to 0 over the recovery
+           tail — no pop at start or end. */
+        const SPASM_CRY_DUR = 1.55;            // == CRY_DUR below
+        const sinceSpasm    = t - cryT;
+        const cryActive     = (sinceSpasm >= 0 && sinceSpasm < SPASM_CRY_DUR);
+        const cryEnv        = cryActive ? ampAt(sinceSpasm * 1000) : 0;  // 0..1 real loudness
+        let spasm = 0;
+        if (cryActive) {
+          const fc = sinceSpasm / SPASM_CRY_DUR;
+          // ramp in over the first ~0.15s (snap), full body through sustain,
+          // fade out across the recovery tail (last ~15%)
+          const rampIn  = easeOutCubic(clamp01(sinceSpasm / 0.15));
+          const fadeOut = 1 - easeInOutCubic(clamp01((fc - 0.85) / (1 - 0.85)));
+          // ride the audio envelope through the hold so it warbles with the
+          // sound, but keep a strong floor so it never goes limp mid-roar
+          spasm = rampIn * fadeOut * (0.55 + 0.45 * cryEnv);
+        }
+        spasm = clamp01(spasm);
+        // idle undulation gives way to the convulsion (don't fully kill it)
+        const idleScale = 1 - 0.6 * spasm;
+
         for (let i = 0; i < N; i++) {
           const b = bodyChain[i];
           if (!b || !b.userData.rest) continue;
@@ -1010,10 +1990,43 @@
             Math.sin(omega * t - k * i)               * 0.85 +
             Math.sin(omega * 0.45 * t - k * 0.55 * i + 1.2) * 0.35 +
             Math.sin(omega * 1.9 * t - k * 1.3 * i + 0.7)   * 0.12;  // small fast ripple
-          b.rotation.y = b.userData.rest.y + wave * amp;
-          b.rotation.x = b.userData.rest.x + Math.sin(omega * t - k * i + Math.PI/2) * axp * 0.7;
+          b.rotation.y = b.userData.rest.y + wave * amp * idleScale;
+          b.rotation.x = b.userData.rest.x + Math.sin(omega * t - k * i + Math.PI/2) * axp * 0.7 * idleScale;
           // z roll along the chain too — subtle, makes the tail flick read 3D
-          b.rotation.z = b.userData.rest.z + Math.sin(omega * 0.6 * t - k * 0.7 * i) * amp * 0.35;
+          b.rotation.z = b.userData.rest.z + Math.sin(omega * 0.6 * t - k * 0.7 * i) * amp * 0.35 * idleScale;
+
+          /* ── AGONY WRITHE — violent, chaotic convulsion over the whole
+             chain while screaming. High-freq shudder (vs the calm idle
+             omega≈1.7) built from 3 incommensurate frequencies + per-bone
+             phase offsets so it reads irregular/spasming, not a clean wave.
+             Grows toward the tail (uu) so the tail thrashes hardest, head
+             least (head/neck also driven by the cry block, so keep their
+             share modest). A DC curl ramps the tail under so the body looks
+             clenched/withering with the shudder riding on top. */
+          if (spasm > 0.0001) {
+            // emphasise the tail: near-0 at head, →1 at tip, slightly eased
+            const uu  = u * u * (0.25 + 0.75 * u);   // head≈0, tail≈1, biased to tip
+            const ph  = i * 1.7;                     // fixed per-bone phase (pseudo-random-ish)
+            const amt = spasm * cryEnv;              // peak only on loud moments
+            // lateral thrash (biggest) — three detuned shudders
+            const thrashY =
+              Math.sin(13.0 * t + i * 1.7)            * 0.55 +
+              Math.sin( 9.3 * t - i * 2.3 + 0.6)      * 0.30 +
+              Math.sin(21.0 * t + i * 0.9)            * 0.15;
+            // vertical buckling
+            const thrashX =
+              Math.sin(11.0 * t - i * 1.3 + 2.1)      * 0.6 +
+              Math.sin(16.5 * t + i * 2.0)            * 0.4;
+            // roll / twist
+            const thrashZ =
+              Math.sin( 8.7 * t + i * 1.1 + 1.4)      * 0.6 +
+              Math.sin(19.0 * t - i * 0.7)            * 0.4;
+            // DC curl: tail clenches under as the spasm ramps in
+            const curl = spasm * uu * 0.45;          // body bows/withers at peak
+            b.rotation.y += thrashY * 0.50 * uu * amt;
+            b.rotation.x += thrashX * 0.25 * uu * amt - curl;
+            b.rotation.z += thrashZ * 0.30 * uu * amt + Math.sin(ph) * curl * 0.4;
+          }
         }
 
         // independent head + neck animation — surveys side to side and
@@ -1042,7 +2055,8 @@
           b.rotation.z += Math.sin(t * 0.22 + 0.7 + i * 0.4) * 0.04;
         }
 
-        // jaw — breathing + sharper snaps
+        // jaw — idle breathing + occasional snap. The screech overrides
+        // this in the dedicated cry block at the end of the frame.
         if (jaw) {
           const breath = Math.sin(t * 1.1) * 0.06 + 0.06;
           const snap   = Math.max(0, Math.sin(t * 0.55 - 1)) ** 10 * 0.30;
@@ -1073,6 +2087,156 @@
         model.rotation.z = Math.sin(t * 0.24) * 0.10;
         model.rotation.y = Math.sin(t * 0.17) * 0.07;
         model.rotation.x = Math.sin(t * 0.20 + 0.6) * 0.05;
+
+        /* ── BALLISTIC SCREECH ──────────────────────────────────────
+           One deliberate, sustained roar (not a vibration), additive on
+           top of the idle pose. The whole thing is mapped onto the ACTUAL
+           1.50s cry audio (see CRY_AMP / ampAt) so the mouth and the body
+           heave track the real sound. Timeline over CRY_DUR (≈1.55s):
+             0–8%   ANTICIPATION  — head/neck rear back, jaw cracks open,
+                                    body coils back (windup ≈120ms, fast,
+                                    because the audio attacks instantly)
+             8–16%  THRUST/SNAP   — head whips forward+down (overshoot),
+                                    jaw SNAPS wide, body recoils hard;
+                                    landing ≈ the audio's full-amplitude
+                                    onset (~240ms)
+             16–85% SUSTAIN       — the big held roar (~1.07s). Jaw is
+                                    driven by ampAt() so it warbles with
+                                    the sound. Head surveys + bobs, neck
+                                    lags, body heaves/sways scaled by the
+                                    envelope — alive, not frozen.
+             85–100% RECOVERY     — jaw follows ampAt() down as the audio
+                                    fades (1280→1520ms), head + body settle.
+           All driven by `since`, so it's smooth at any framerate. Each
+           phase's start value equals the previous phase's end value. */
+        const CRY_DUR = 1.55;     // ≈ audio length (1.50s) + a little settle
+        const P_ANT = 0.08, P_SNAP = 0.16, P_SUS = 0.85; // phase boundaries
+        const since = t - cryT;
+        if (since >= 0 && since < CRY_DUR) {
+          const f  = since / CRY_DUR;
+          const ms = since * 1000;
+          const head = bodyChain[0], neck = bodyChain[1];
+
+          // envelope sample (0..1) and a sustain-local progress 0..1 used to
+          // shape the slow, low-frequency "living" motion through the roar.
+          const env = ampAt(ms);
+          const su  = clamp01((f - P_SNAP) / (P_SUS - P_SNAP)); // 0 at snap → 1 at recovery start
+
+          // ── HEAD pitch (rear back + → thrust forward −, overshoot → live) ──
+          let headX;
+          if      (f < P_ANT)  headX = lerp(0, 0.20, seg(since, 0, P_ANT*CRY_DUR, easeOutCubic));
+          else if (f < P_SNAP) headX = lerp(0.20, -0.26, seg(since, P_ANT*CRY_DUR, P_SNAP*CRY_DUR, easeOutBack));
+          else if (f < P_SUS) {
+            // slow forward drift across the roar + a gentle low-freq bob, all
+            // additive on the snap's −0.26 landing. Heaves a touch with `env`.
+            const drift = lerp(-0.26, -0.14, easeInOutCubic(su));     // creeps forward over the hold
+            const bob   = Math.sin(su * Math.PI * 2.0) * 0.05;        // one slow nod through the roar
+            headX = drift + bob - 0.03 * env;                         // dips deeper on louder moments
+          } else {
+            const e = seg(since, P_SUS*CRY_DUR, CRY_DUR, easeInOutCubic);
+            headX = lerp(-0.14, 0, e);                                // settle from the sustain end value
+          }
+
+          // ── HEAD yaw / roll — slow side survey + roll so it keeps living ──
+          let headY = 0, headZ = 0;
+          if (f >= P_SNAP && f < P_SUS) {
+            headY = Math.sin(su * Math.PI * 1.5 + 0.4) * 0.06;        // slow side survey ±0.06
+            headZ = Math.sin(su * Math.PI * 1.2)       * 0.04;        // gentle roll ±0.04
+          } else if (f >= P_SUS) {
+            const e = seg(since, P_SUS*CRY_DUR, CRY_DUR, easeInOutCubic);
+            headY = lerp(Math.sin(Math.PI*1.5+0.4)*0.06, 0, e);      // ease the survey/roll back to 0
+            headZ = lerp(Math.sin(Math.PI*1.2)*0.04,     0, e);
+          }
+
+          // ── NECK — follows the head, smaller + with a slight lag ──
+          let neckX;
+          if      (f < P_ANT)  neckX = lerp(0, 0.13, seg(since, 0, P_ANT*CRY_DUR, easeOutCubic));
+          else if (f < P_SNAP) neckX = lerp(0.13, -0.12, seg(since, P_ANT*CRY_DUR, P_SNAP*CRY_DUR, easeOutCubic));
+          else if (f < P_SUS) {
+            const sl    = clamp01(su - 0.06) / (1 - 0.06);            // lag the head a touch
+            const drift = lerp(-0.12, -0.06, easeInOutCubic(sl));
+            const bob   = Math.sin(sl * Math.PI * 2.0) * 0.025;
+            neckX = drift + bob - 0.015 * env;
+          } else {
+            const e = seg(since, P_SUS*CRY_DUR, CRY_DUR, easeInOutCubic);
+            neckX = lerp(-0.06, 0, e);
+          }
+          const neckY = headY * 0.5, neckZ = headZ * 0.5;             // follow head with falloff
+
+          // ── JAW — pre-open → SNAP wide → ride the REAL envelope → fade ──
+          const JAW_BASE = 0.45, JAW_MAX = 0.95;
+          let jawX;
+          if      (f < P_ANT)  jawX = lerp(0, 0.30, seg(since, 0, P_ANT*CRY_DUR, easeOutCubic));
+          else if (f < P_SNAP) jawX = lerp(0.30, JAW_BASE + (JAW_MAX-JAW_BASE)*ampAt(P_SNAP*CRY_DUR*1000),
+                                           seg(since, P_ANT*CRY_DUR, P_SNAP*CRY_DUR, easeOutCubic));
+          else {
+            // PRIMARY motion: mouth open amount tracks the audio loudness/warble.
+            jawX = JAW_BASE + (JAW_MAX - JAW_BASE) * env;
+            // subtle high-freq micro-tremor, only in the first ~200ms of sustain
+            if (f < P_SUS) {
+              const tre = Math.exp(-(since - P_SNAP*CRY_DUR) * 10);   // dies within ~200ms
+              jawX += 0.03 * tre * Math.sin(since * Math.PI * 46);
+            }
+            // (RECOVERY needs no special case — env itself decays to ~0 over
+            //  the audio tail, so the mouth closes in sync with the dying sound)
+          }
+
+          // ── WHOLE BODY — coil → hard recoil → slow settle-forward + heave ──
+          let mZ, mPitch, mRoll = 0, mX = 0;
+          if (f < P_ANT) {
+            const e = seg(since, 0, P_ANT*CRY_DUR, easeOutCubic);
+            mZ = lerp(0, 0.6, e); mPitch = lerp(0, 0.04, e);
+          } else if (f < P_SNAP) {
+            const e = seg(since, P_ANT*CRY_DUR, P_SNAP*CRY_DUR, easeOutBack);
+            mZ = lerp(0.6, -1.5, e); mPitch = lerp(0.04, -0.06, e);   // recoil hard on the snap
+          } else if (f < P_SUS) {
+            // slow recoil-and-recover surge: from the hard −1.5 recoil, the
+            // body eases forward through the roar, with a continuous sway/roll
+            // and a heave scaled by the live envelope so it reacts to the sound.
+            const settle = easeOutCubic(su);
+            mZ     = lerp(-1.5, -0.5, settle) - 0.35 * env;           // heaves back on louder moments
+            mPitch = lerp(-0.06, -0.03, settle) - 0.02 * env;
+            mRoll  = Math.sin(su * Math.PI * 1.3 + 0.2) * 0.06 * (0.5 + 0.5*env); // slow sway, louder = bigger
+            mX     = Math.sin(su * Math.PI * 1.0)       * 0.30;       // gentle lateral drift
+          } else {
+            const e = seg(since, P_SUS*CRY_DUR, CRY_DUR, easeInOutCubic);
+            mZ     = lerp(-0.5 - 0.35*ampAt(P_SUS*CRY_DUR*1000), 0, e);
+            mPitch = lerp(-0.03, 0, e);
+            mRoll  = lerp(Math.sin(Math.PI*1.3+0.2)*0.06, 0, e);
+            mX     = lerp(Math.sin(Math.PI*1.0)*0.30,     0, e);
+          }
+
+          // ── ARMS (wing-like) — flare wider through the roar, scaled by env ──
+          if (f >= P_ANT) {
+            const flare = (f < P_SUS)
+              ? easeOutCubic(clamp01((f - P_ANT) / (P_SUS - P_ANT))) * (0.5 + 0.5*env)
+              : lerp(0.5 + 0.5*ampAt(P_SUS*CRY_DUR*1000), 0, seg(since, P_SUS*CRY_DUR, CRY_DUR, easeInOutCubic));
+            const armFlare = 0.30 * flare;   // extra outward sway on top of idle
+            arms.L.forEach((b, i) => { if (b.userData.rest) b.rotation.z += armFlare * (1 + i*0.3); });
+            arms.R.forEach((b, i) => { if (b.userData.rest) b.rotation.z -= armFlare * (1 + i*0.3); });
+          }
+
+          if (head && head.userData.rest) { head.rotation.x += headX; head.rotation.y += headY; head.rotation.z += headZ; }
+          if (neck && neck.userData.rest) { neck.rotation.x += neckX; neck.rotation.y += neckY; neck.rotation.z += neckZ; }
+          if (jaw) jaw.rotation.x = jaw.userData.rest.x + Math.max(0, jawX);
+          model.position.z += mZ;
+          model.position.x += mX;
+          model.rotation.x += mPitch;
+          model.rotation.z += mRoll;
+
+          // ── WHOLE-MODEL AGONY SHAKE — fast high-freq tremor on top of the
+          // recoil/sway above, so the entire creature visibly shudders while
+          // it screams. Scaled by spasm*env (computed above) so it builds at
+          // the onset and dies as the cry fades — additive, smooth at edges.
+          const shake = spasm * cryEnv;
+          if (shake > 0.0001) {
+            model.position.x += (Math.sin(34 * t) * 0.10 + Math.sin(53 * t + 1.3) * 0.05) * shake;
+            model.position.y += (Math.sin(41 * t + 0.7) * 0.10 + Math.sin(27 * t) * 0.05) * shake;
+            model.rotation.z += Math.sin(47 * t + 0.4) * 0.05 * shake;
+            model.rotation.x += Math.sin(38 * t + 2.1) * 0.04 * shake;
+            model.rotation.y += Math.sin(30 * t + 1.1) * 0.04 * shake;
+          }
+        }
       }
 
       // camera locked — frame the model + pk text dead center. we'll
