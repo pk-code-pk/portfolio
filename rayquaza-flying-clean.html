@@ -808,30 +808,100 @@
        updates for rayquaza.
 
        Knobs (top of file feel): GREN_CYAN (rim/aura colour),
-       RAIN_COUNT (density), WET_RAMP (wet-glass ramp speed), and the
-       backdrop tint colours below.
+       WET_RAMP (wet-glass ramp speed), UW_MARINE_COUNT (snow density),
+       and the UW_* underwater palette/intensity knobs below.
        ══════════════════════════════════════════════════════════════════ */
-    const GREN_CYAN  = new THREE.Color(0x33e0ff);   // aura / rim / rain tint knob
-    // rain density — scaled down on touch devices (mobile GPU budget)
-    const RAIN_COUNT = TOUCH_DEVICE ? 160 : 420;
+    const GREN_CYAN  = new THREE.Color(0x33e0ff);   // aura / rim tint knob
     const WET_RAMP   = 1.8;    // wetness units/sec ramp (uWet 0→1)
 
-    /* ── greninja backdrop: turbulent STORM SKY dome ──────────────────
-       Inverted sphere with layered fbm storm clouds (two parallax cloud
-       decks drifting at different speeds) over a moody desaturated
-       slate blue-grey gradient. A faint lighter break sits near the
-       horizon. uFlash (driven JS-side, greninja-only) briefly lifts the
-       whole sky on distant lightning. Hidden unless greninja is active.
-       Palette knobs: ZENITH/HORIZON/CLOUD_DARK/CLOUD_LIT below; cloud
-       drift speed via the `t` multipliers; flash colour via FLASH. */
+    /* ── underwater textures (greninja scene) ──────────────────────────
+       caustics.png : seamless grayscale caustic (CC0) — RepeatWrapping,
+                      sampled twice + min()'d to kill tiling.
+       waternormals.jpg: three.js MIT surface-ripple normal (kept for the
+                      optional Snell-window shimmer; loaded but the dome
+                      uses procedural normals so a 404 still can't break
+                      the scene). Loads are guarded — on error the dome
+                      shader simply renders without the texture (uHasCaust
+                      stays 0) instead of throwing.
+       Tuning knobs for the whole underwater look live in UW_* below. */
+    const causticsTex = new THREE.TextureLoader().load(
+      'underwater/caustics.png',
+      (tex) => {
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.colorSpace = THREE.NoColorSpace;   // it's a data/height map, not sRGB
+        try { if (greninjaSkyMat) greninjaSkyMat.uniforms.uHasCaust.value = 1; } catch(e){}
+      },
+      undefined,
+      () => { /* 404-safe: leave uHasCaust=0, dome renders w/o caustics */ }
+    );
+    causticsTex.wrapS = causticsTex.wrapT = THREE.RepeatWrapping;
+
+    // underwater palette + intensity knobs (all greninja-only)
+    const UW_FOG_COLOR     = 0x0a3a4a;   // FogExp2 colour (deep blue-green)
+    const UW_FOG_DENSITY   = 0.018;      // FogExp2 density (0.012–0.05)
+    const UW_NEAR_TINT      = new THREE.Color(0x0e5a66); // water near surface
+    const UW_DEEP_TINT      = new THREE.Color(0x041a24); // water at depth
+    const UW_SHAFT_TINT     = new THREE.Color(0xbfeaff); // god-ray / surface light
+    const UW_CAUST_SCALE    = 3.0;   // caustic cell size (bigger = larger cells)
+    const UW_CAUST_STRENGTH = 1.25;  // caustic brightness
+    const UW_CAUST_POWER     = 2.2;  // caustic contrast (higher = sharper webs)
+    const UW_CAUST_ABERR     = 0.012;// chromatic split on caustics
+    const UW_GODRAY_STRENGTH = 1.15; // shaft intensity multiplier
+    const UW_MARINE_COUNT    = TOUCH_DEVICE ? 500 : 1100; // marine-snow particles
+
+    /* ── greninja backdrop: REALISTIC UNDERWATER DOME ─────────────────
+       Replaces the old storm-sky dome. Inverted sphere whose shader
+       composites the whole "water volume" look in one pass:
+
+         (a) DEPTH GRADIENT  — bright blue-green up top (toward the
+             surface) fading to a near-black deep at the bottom, with a
+             soft bright Snell's-window disc straight overhead.
+         (b) BEER–LAMBERT absorption — per-channel exp(-absorb*d) over the
+             view ray so warm/red light dies first with depth, the way it
+             does underwater. (FogExp2 on the scene handles the model;
+             this is the backdrop's own depth tint.)
+         (c) GOD-RAY SHAFTS  — strong vertical volumetric shafts projected
+             from a bright sun high in +Y. Two animated noise layers of
+             stripes, soft-additive, masked stronger near the top + along
+             the up direction. This is the PROCEDURAL-SHAFT FALLBACK the
+             spec allows (chosen over bolting the 3-pass GodRaysShader onto
+             the shared EffectComposer, which would have risked rayquaza's
+             bloom/ACES chain — a contained dome layer is zero-risk and
+             gated greninja-only).
+         (d) CAUSTICS        — underwater/caustics.png sampled as two
+             scrolled layers, min()'d together to break tiling, with a
+             chromatic UV split + pow() contrast (technique per spec);
+             projected from above (world-XZ-ish via dir.xz/dir.y) and
+             faded out with depth so they read as surface-projected light.
+
+       Refs: god-ray + caustic compositing technique — three.js ocean /
+       Shadertoy caustic patterns (the min()-of-two-layers trick is the
+       standard anti-tiling approach); Beer–Lambert underwater absorption
+       coefficients vec3(0.45,0.10,0.05) from the underwater-rendering
+       literature. Hidden unless greninja is active. Knobs: UW_* above. */
     let greninjaSkyMat = null;
     {
       const geo = new THREE.SphereGeometry(1400, 48, 32);
       const mat = new THREE.ShaderMaterial({
         side: THREE.BackSide,
         depthWrite: false,
-        toneMapped: false,
-        uniforms: { uTime: { value: 0 }, uFlash: { value: 0 } },
+        toneMapped: true,   // let OutputPass ACES tone-map the bright shafts
+        uniforms: {
+          uTime:         { value: 0 },
+          causticsTex:   { value: causticsTex },
+          uHasCaust:     { value: 0 },        // 1 once the texture finishes loading
+          uNearTint:     { value: UW_NEAR_TINT },
+          uDeepTint:     { value: UW_DEEP_TINT },
+          uShaftTint:    { value: UW_SHAFT_TINT },
+          uCausScale:    { value: UW_CAUST_SCALE },
+          uCausStrength: { value: UW_CAUST_STRENGTH },
+          uCausPower:    { value: UW_CAUST_POWER },
+          uCausAberr:    { value: UW_CAUST_ABERR },
+          uGodStrength:  { value: UW_GODRAY_STRENGTH },
+          uPulse:        { value: 0 },   // 0..1 music amplitude (reactive)
+        },
         vertexShader: /* glsl */`
           varying vec3 vDir;
           void main() {
@@ -841,7 +911,12 @@
         fragmentShader: /* glsl */`
           varying vec3 vDir;
           uniform float uTime;
-          uniform float uFlash;
+          uniform sampler2D causticsTex;
+          uniform float uHasCaust;
+          uniform vec3  uNearTint, uDeepTint, uShaftTint;
+          uniform float uCausScale, uCausStrength, uCausPower, uCausAberr, uGodStrength;
+          uniform float uPulse;   // 0..1 music amplitude — drives reactive brightness
+
           float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
           float noise(vec3 p){
             vec3 i = floor(p); vec3 f = fract(p);
@@ -855,54 +930,74 @@
           }
           float fbm(vec3 p){
             float v = 0.0; float a = 0.5;
-            for (int i = 0; i < 6; i++){ v += a * noise(p); p = p * 2.02 + 11.3; a *= 0.5; }
+            for (int i = 0; i < 4; i++){ v += a * noise(p); p = p * 2.03 + 7.1; a *= 0.5; }
             return v;
           }
+
+          // layered, anti-tiled caustics (spec technique) — caustics.png is
+          // grayscale (r=g=b) but the per-channel UV offset still gives a
+          // real chromatic split at the web edges.
+          vec3 sampleCaustics(vec2 wUV){
+            vec2 uv1 = wUV*(1.0/uCausScale)            + uTime*0.030*vec2(1.0,0.7);
+            vec2 uv2 = wUV*(1.0/(uCausScale*0.90))     - uTime*0.022*vec2(0.7,1.0);
+            vec2 dd  = vec2(uCausAberr, 0.0);
+            vec3 c1 = vec3(texture2D(causticsTex,uv1+dd).r, texture2D(causticsTex,uv1).g, texture2D(causticsTex,uv1-dd).b);
+            vec3 c2 = vec3(texture2D(causticsTex,uv2+dd).r, texture2D(causticsTex,uv2).g, texture2D(causticsTex,uv2-dd).b);
+            vec3 c  = min(c1, c2);                 // AND of two layers kills the tile
+            c = pow(c, vec3(uCausPower));
+            return c * uCausStrength;
+          }
+
           void main(){
             vec3 d = normalize(vDir);
-            float h = d.y;                       // -1 (down) .. 1 (up)
-            float t = uTime * 0.02;
+            float h = d.y;                          // -1 down .. 1 up
 
-            // ── moody storm gradient ──────────────────────────────────
-            // desaturated slate blue-grey, darker overhead, a touch warmer
-            // /lighter toward the horizon (overcast light scatters low).
-            vec3 ZENITH  = vec3(0.020, 0.030, 0.052);   // dark slate overhead
-            vec3 HORIZON = vec3(0.090, 0.115, 0.150);   // pale slate at horizon
-            float hg = smoothstep(-0.15, 0.85, h);
-            vec3 base = mix(HORIZON, ZENITH, hg);
-            // subtle lighter break just above the horizon (gap in the storm)
-            float breakBand = smoothstep(0.18, 0.0, abs(h - 0.06));
-            base += vec3(0.05, 0.07, 0.09) * breakBand * 0.55;
+            // ── (a) depth gradient + (b) Beer–Lambert absorption ────────
+            // pseudo view-depth: looking down/along is "deeper" water in
+            // front of the ray than looking up toward the surface.
+            float surf  = smoothstep(-0.25, 1.0, h);          // 0 deep .. 1 surface
+            float depth = (1.0 - surf) * 6.0;                 // optical path length
+            vec3 absorb = vec3(0.45, 0.10, 0.05);             // red dies first
+            vec3 water  = mix(uDeepTint, uNearTint, surf);
+            // apply absorption: tint the "transmitted" colour, blend by depth
+            vec3 col = mix(water, water * exp(-absorb * depth), 1.0 - exp(-0.18 * depth));
 
-            // project the dome onto a domain that flattens overhead so the
-            // clouds read as a ceiling rather than radial spokes
-            vec3 q = d / max(0.30, d.y * 0.5 + 0.8);
+            // ── Snell's window: soft bright disc straight overhead ──────
+            // music-reactive: surface light brightens on the beat
+            float window = smoothstep(0.55, 1.0, h);
+            col += uShaftTint * pow(window, 2.0) * (0.45 + uPulse * 0.55);
 
-            // ── two parallax cloud decks ──────────────────────────────
-            // far deck: big slow masses; near deck: smaller, faster, with
-            // more contrast — gives depth + motion.
-            float far  = fbm(q * 1.6 + vec3( t*0.6, t*0.15, -t*0.4));
-            float near = fbm(q * 3.6 + vec3(-t*1.3, t*0.10,  t*0.9) + far*0.8);
-            // turbulence shapes the billows
-            float clouds = far*0.55 + near*0.55;
-            clouds = clouds*clouds;                       // crush midtones → billowy
-            float cover  = smoothstep(0.18, 0.95, clouds); // 0 sky .. 1 dense cloud
+            // ── (c) procedural GOD-RAY shafts from the surface ──────────
+            // Near-PARALLEL, soft VERTICAL light beams descending from the
+            // surface, NOT a radial fan. We use a horizontal screen-ish
+            // coordinate sx (slightly splayed with depth so beams lean out
+            // a touch toward the edges) as the across-beam axis, and depth as
+            // the along-beam axis. Two low-frequency noise bands scrolling
+            // sideways make broad, soft, drifting columns. Low contrast so
+            // they read as hazy light, not hard spokes.
+            vec2 sp = d.xz / max(0.18, h * 0.6 + 0.55);       // ceiling-projected coords
+            float sx = d.x * (1.0 + (1.0 - h) * 0.35);        // across-beam axis (gentle splay)
+            // broad columns: low x-freq + very low depth-freq, scroll sideways
+            float band1 = fbm(vec3(sx * 3.0,        (1.0 - h) * 0.35, uTime * 0.04 + 11.0));
+            float band2 = fbm(vec3(sx * 5.5 + 3.0,  (1.0 - h) * 0.50, uTime * 0.06 + 2.0));
+            // soften: lower power, and smoothstep to roll off the low end so
+            // there are no hard edges. value stays in a gentle 0..1.
+            float shafts = clamp(band1 * 0.62 + band2 * 0.42, 0.0, 1.0);
+            shafts = smoothstep(0.35, 0.95, shafts);          // soft beams, no sharp spokes
+            // fade beams in from the surface and gently outward (no hot center spike)
+            float beamTop = smoothstep(-0.15, 0.9, h);        // brightest up high, fade with depth
+            float beamSide = mix(1.0, 0.55, smoothstep(0.4, 1.3, abs(d.x))); // mild edge falloff
+            shafts *= beamTop * beamSide;
+            // music-reactive: the god-ray beams swell/brighten with the beat
+            col += uShaftTint * shafts * uGodStrength * (0.6 + uPulse * 0.9);
 
-            vec3 CLOUD_DARK = vec3(0.035, 0.050, 0.072);  // shadowed underside
-            vec3 CLOUD_LIT  = vec3(0.150, 0.180, 0.225);  // lit billow tops
-            // light comes from slightly above: lit where near-deck noise
-            // is high (catching the top of a billow)
-            float lit = smoothstep(0.35, 0.85, near);
-            vec3 cloudCol = mix(CLOUD_DARK, CLOUD_LIT, lit);
-
-            vec3 col = mix(base, cloudCol, cover * (0.55 + 0.45*hg));
-
-            // ── distant lightning flash ───────────────────────────────
-            // uFlash (0..1) briefly lifts brightness, brightest where the
-            // clouds are (back-lit) and toward the lower sky.
-            vec3 FLASH = vec3(0.55, 0.62, 0.80);
-            float flashShape = (0.4 + cover*0.9) * (0.5 + (1.0-hg)*0.7);
-            col += FLASH * uFlash * flashShape;
+            // ── (d) caustics, surface-projected, faded with depth ───────
+            if (uHasCaust > 0.5){
+              vec3 caus = sampleCaustics(sp * 1.3);
+              // brighter toward the surface, present across the upper field;
+              // caustics shimmer brighter on the beat (music-reactive)
+              col += caus * uShaftTint * surf * (0.6 + 0.6 * window) * (1.1 + uPulse * 0.8);
+            }
 
             gl_FragColor = vec4(col, 1.0);
           }`
@@ -915,100 +1010,122 @@
       window.__greninjaSky = mesh;
     }
 
-    /* ── greninja rain — layered downpour ─────────────────────────────
-       Dense vertical streaks as additive LineSegments (2 verts each).
-       Each streak is assigned a DEPTH in [0,1] (0 = far, 1 = near) that
-       drives, together:  fall speed, streak length, slant, horizontal
-       spread, and per-vertex brightness — so near streaks are fast,
-       long, bright and wide-spread while far streaks are slow, short,
-       faint and clustered toward the center. That depth correlation is
-       what reads as a real 3D downpour with parallax rather than a flat
-       sheet of identical dashes. A faint bright "head" on each streak
-       (top vertex brighter than the trailing bottom) gives a subtle
-       motion-blur/comet feel.
+    /* ── greninja MARINE SNOW — suspended particulate (replaces rain) ──
+       Underwater there is no rain; instead the water is full of slow-
+       drifting organic/mineral detritus ("marine snow"). THREE.Points,
+       additive, soft round falloff, near-white cool tint, sinking slowly
+       with a gentle sine XZ wobble + a tiny per-particle twinkle. All
+       positions derived from a per-particle seed + `t` (no integration,
+       no allocation, framerate-independent). Hidden + not updated unless
+       greninja is active. Count scaled on TOUCH_DEVICE (UW_MARINE_COUNT).
 
-       All positions are derived from a per-streak seed + `t` each frame
-       (no integration, no allocation, framerate-independent). Cool
-       desaturated blue-white, additive so it picks up a little bloom.
-       Hidden + not updated unless greninja is active. Count is scaled
-       down on TOUCH_DEVICE (RAIN_COUNT above).
+       DESIGN (after feedback that big uniform dots read as clip-art): the
+       field is deliberately BARELY-THERE — tiny specks (mostly ~1px, a
+       rare slightly-larger one), very low opacity, heavy per-particle
+       brightness/size variance, and a hard point-size CAP so nothing ever
+       blooms into a bokeh blob no matter how close to the camera it drifts.
+       The volume is pushed mostly BEHIND/around the model (away from the
+       lens) and far flakes dim toward the fog. It's an atmospheric accent,
+       not a feature — easy to tune down further or cut via UW_MARINE_COUNT.
 
-       Knobs: RAIN_COUNT (density), RAIN_R (column radius),
-       RAIN_LEN_* (streak length range), RAIN_SPEED_* (fall speed range),
-       RAIN_WIND (slant). */
-    const RAIN_H        = 90;    // full vertical span the rain recycles over
-    const RAIN_TOP      = 46;    // top of the volume relative to scene center
-    const RAIN_R        = 42;    // horizontal radius of the rain column (near)
-    const RAIN_LEN_MIN  = 1.6;   // far streaks: short
-    const RAIN_LEN_MAX  = 6.5;   // near streaks: long (motion-blur feel)
-    const RAIN_SPEED_MIN= 26;    // far streaks: slower
-    const RAIN_SPEED_MAX= 70;    // near streaks: fast
-    const RAIN_WIND     = 7.0;   // horizontal slant magnitude
-    let rainMesh = null, rainPos = null, rainCol = null, rainSeed = null;
+       Knobs: UW_MARINE_COUNT (density), SNOW_R (volume radius),
+       SNOW_H (vertical span), SNOW_SPEED (sink speed), SNOW_SIZE (px),
+       SNOW_OPACITY, SNOW_MAX_PX (hard size cap). */
+    const SNOW_R       = 46;    // horizontal radius of the snow volume
+    const SNOW_H       = 64;    // vertical span it recycles over
+    const SNOW_TOP     = 34;    // top of the volume relative to scene center
+    const SNOW_Z_BACK  = 14;    // push the cloud back (away from the camera)
+    const SNOW_SPEED   = 1.3;   // slow sink (world units/sec)
+    const SNOW_SIZE    = 1.4;   // base point size (px @ DPR1, pre-attenuation)
+    const SNOW_OPACITY = 0.085; // master opacity (very faint)
+    const SNOW_MAX_PX  = 3.5;   // HARD cap so nothing becomes a blob
+    let snowMesh = null, snowPos = null, snowSeed = null;
     {
       const geo = new THREE.BufferGeometry();
-      rainPos  = new Float32Array(RAIN_COUNT * 2 * 3);   // 2 verts/streak
-      rainCol  = new Float32Array(RAIN_COUNT * 2 * 3);   // per-vertex colour
-      // per-streak seed: x-base, z-base, phase(0..1), depth(0..1)
-      rainSeed = new Float32Array(RAIN_COUNT * 4);
-      // cool blue-white base tint
-      const TR = 0.62, TG = 0.78, TB = 1.0;
-      for (let i = 0; i < RAIN_COUNT; i++) {
-        const depth = Math.random();                    // 0 far .. 1 near
-        // near streaks spread wider (more parallax); far cluster center
-        const spread = RAIN_R * (0.30 + 0.70 * depth);
+      snowPos  = new Float32Array(UW_MARINE_COUNT * 3);
+      // per-particle seed: x, z, phase(0..1), wobble-amp(0..1)
+      snowSeed = new Float32Array(UW_MARINE_COUNT * 4);
+      const jit = new Float32Array(UW_MARINE_COUNT); // size/brightness jitter
+      for (let i = 0; i < UW_MARINE_COUNT; i++) {
         const ang = Math.random() * Math.PI * 2;
-        const rad = Math.sqrt(Math.random()) * spread;
-        rainSeed[i*4+0] = Math.cos(ang) * rad;          // x
-        rainSeed[i*4+1] = Math.sin(ang) * rad * 0.55;   // z (flattened)
-        rainSeed[i*4+2] = Math.random();                // phase
-        rainSeed[i*4+3] = depth;
-        // brightness scales with depth; the streak HEAD (top vert) is
-        // brighter than the trailing tail for a comet/motion-blur look.
-        const b = (0.22 + depth * 0.85) * 0.5;          // overall brightness (dimmed for subtle rain)
-        const o = i * 6;
-        rainCol[o+0] = TR*b;      rainCol[o+1] = TG*b;      rainCol[o+2] = TB*b;      // head
-        rainCol[o+3] = TR*b*0.35; rainCol[o+4] = TG*b*0.35; rainCol[o+5] = TB*b*0.35; // tail
+        const rad = Math.sqrt(Math.random()) * SNOW_R;
+        snowSeed[i*4+0] = Math.cos(ang) * rad;          // x base
+        snowSeed[i*4+1] = Math.sin(ang) * rad;          // z base
+        snowSeed[i*4+2] = Math.random();                // fall phase 0..1
+        snowSeed[i*4+3] = Math.random();                // wobble seed 0..1
+        // HEAVY size variance: pow() pushes most flakes tiny, only a rare
+        // few approach 1.0 → no uniform polka-dot look.
+        jit[i] = Math.pow(Math.random(), 3.0);          // ~0 mostly, rarely ~1
       }
-      geo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
-      geo.setAttribute('color',    new THREE.BufferAttribute(rainCol, 3));
-      const mat = new THREE.LineBasicMaterial({
-        vertexColors: true,
+      geo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
+      geo.setAttribute('aJit',     new THREE.BufferAttribute(jit, 1));
+      const mat = new THREE.ShaderMaterial({
         transparent: true,
-        opacity: 0.42,
-        blending: THREE.AdditiveBlending,
         depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+        uniforms: {
+          uColor:   { value: new THREE.Color(0xcfe8e8) },
+          uOpacity: { value: SNOW_OPACITY },
+          uSize:    { value: SNOW_SIZE * (TOUCH_DEVICE ? 1.0 : (window.devicePixelRatio || 1)) },
+          uMaxPx:   { value: SNOW_MAX_PX * (TOUCH_DEVICE ? 1.0 : (window.devicePixelRatio || 1)) },
+          uTime:    { value: 0 },
+        },
+        vertexShader: /* glsl */`
+          uniform float uSize, uMaxPx;
+          attribute float aJit;
+          varying float vJit;
+          varying float vFade;
+          void main(){
+            vJit = aJit;
+            vec4 mv = modelViewMatrix * vec4(position, 1.0);
+            float dist = -mv.z;
+            // base size grows a touch with jitter; perspective attenuation
+            // then HARD-CAPPED so a near flake can never be a giant blob.
+            float px = uSize * (0.6 + aJit * 1.6) * (60.0 / max(8.0, dist));
+            gl_PointSize = clamp(px, 0.0, uMaxPx);
+            // far flakes dim toward the fog so density isn't uniform in z
+            vFade = smoothstep(120.0, 18.0, dist);
+            gl_Position = projectionMatrix * mv;
+          }`,
+        fragmentShader: /* glsl */`
+          uniform vec3  uColor;
+          uniform float uOpacity;
+          uniform float uTime;
+          varying float vJit;
+          varying float vFade;
+          void main(){
+            float dd = length(gl_PointCoord - 0.5);
+            float a  = smoothstep(0.5, 0.0, dd);          // soft round falloff
+            // brightness varies with jitter (most flakes dim) + slow twinkle
+            float bright = 0.35 + 0.65 * vJit;
+            a *= uOpacity * bright * vFade;
+            a *= 0.65 + 0.35 * sin(uTime * 1.3 + vJit * 53.1);
+            gl_FragColor = vec4(uColor, a);
+          }`
       });
-      rainMesh = new THREE.LineSegments(geo, mat);
-      rainMesh.frustumCulled = false;
-      rainMesh.visible = false;     // greninja-only
-      scene.add(rainMesh);
-      window.__rain = rainMesh;
+      snowMesh = new THREE.Points(geo, mat);
+      snowMesh.frustumCulled = false;
+      snowMesh.visible = false;     // greninja-only
+      scene.add(snowMesh);
+      window.__snow = snowMesh;
     }
-    // advance the rain — called each frame ONLY while greninja is shown.
-    function updateRain(t) {
-      const cx = modelCenter.x, cy = modelCenter.y, cz = modelCenter.z;
-      const span = RAIN_H;
-      const pos = rainPos;
-      for (let i = 0; i < RAIN_COUNT; i++) {
-        const sx = rainSeed[i*4+0];
-        const sz = rainSeed[i*4+1];
-        const ph = rainSeed[i*4+2];
-        const dp = rainSeed[i*4+3];                     // depth 0..1
-        const sp  = RAIN_SPEED_MIN + (RAIN_SPEED_MAX - RAIN_SPEED_MIN) * dp;
-        const len = RAIN_LEN_MIN  + (RAIN_LEN_MAX  - RAIN_LEN_MIN ) * dp;
-        const fall = (ph * span + t * sp) % span;       // 0..span, recycles
-        const yTop = cy + RAIN_TOP - fall;              // streak head (top)
-        const yBot = yTop - len;                        // trailing tail
-        // consistent wind slant; near streaks slant a touch more
-        const dx = RAIN_WIND * (0.6 + dp * 0.6) * (len / RAIN_LEN_MAX);
-        const xTop = cx + sx;
-        const xBot = cx + sx + dx;
-        const o = i * 6;
-        pos[o+0] = xTop; pos[o+1] = yTop; pos[o+2] = cz + sz;
-        pos[o+3] = xBot; pos[o+4] = yBot; pos[o+5] = cz + sz;
+    // advance the marine snow — called each frame ONLY while greninja shown.
+    function updateSnow(t) {
+      const cx = modelCenter.x, cy = modelCenter.y, cz = modelCenter.z - SNOW_Z_BACK;
+      const span = SNOW_H, pos = snowPos;
+      for (let i = 0; i < UW_MARINE_COUNT; i++) {
+        const sx = snowSeed[i*4+0];
+        const sz = snowSeed[i*4+1];
+        const ph = snowSeed[i*4+2];
+        const wb = snowSeed[i*4+3];
+        const fall = (ph * span + t * SNOW_SPEED) % span;   // 0..span, recycles
+        const o = i * 3;
+        pos[o+0] = cx + sx + Math.sin(t * 0.35 + wb * 6.2) * 0.8;  // gentle XZ wobble
+        pos[o+1] = cy + SNOW_TOP - fall;
+        pos[o+2] = cz + sz + Math.cos(t * 0.30 + wb * 4.1) * 0.8;
       }
-      rainMesh.geometry.attributes.position.needsUpdate = true;
+      snowMesh.geometry.attributes.position.needsUpdate = true;
     }
 
     /* ── greninja cyan key light + lighting swap ──────────────────────
@@ -1258,20 +1375,20 @@
        effect lives entirely inside the compiled shader behind uWet, while
        glassCharge only touches JS material properties — different layers,
        no shared state. */
-    const pkWet = { uWet: { value: 0.0 }, uTime: { value: 0.0 } };
+    const pkWet = { uWet: { value: 0.0 }, uTime: { value: 0.0 }, uPulse: { value: 0.0 } };
     function installWetGlass(mat) {
-      // DISABLED: the per-letter material droplet hack read poorly and now
-      // conflicts with the fullscreen rain-on-glass post-process (which
-      // covers the letters too, more convincingly). Left as a no-op so the
-      // glass material stays pristine. Re-enable by removing this return.
-      return;
+      // Per-letter droplet effect: drops bead and roll down ONLY the glass
+      // "pk" letters (object-space), refracting/beading on the surface. The
+      // fullscreen rain-on-glass post-process is DISABLED (it smeared the
+      // whole view), so these per-letter droplets are the wet effect.
       if (mat.userData.__wetInstalled) return;
       mat.userData.__wetInstalled = true;
       const prev = mat.onBeforeCompile;
       mat.onBeforeCompile = (shader) => {
         if (prev) prev(shader);
-        shader.uniforms.uWet  = pkWet.uWet;
-        shader.uniforms.uTime = pkWet.uTime;
+        shader.uniforms.uWet   = pkWet.uWet;
+        shader.uniforms.uTime  = pkWet.uTime;
+        shader.uniforms.uPulse = pkWet.uPulse;
         // droplet field helpers + a normal perturbation, injected before
         // lighting so the wobble affects reflection/refraction. Object-
         // space position (vWetPos) gives a stable UV that rolls downward.
@@ -1290,6 +1407,7 @@
            varying vec3 vWetPos;
            uniform float uWet;
            uniform float uTime;
+           uniform float uPulse;   // 0..1 music amplitude — pulses the blue glow
            // ── rain-on-glass droplet field — adapted from "Heartfelt" by
            //    Martijn Steinrucken / BigWIngs (Shadertoy ltffzl,
            //    CC BY-NC-SA 3.0), ported to object-space on the letters.
@@ -1355,11 +1473,11 @@
            }
            // combine static beads + two falling-drop layers (Heartfelt Drops)
            vec2 dropField(vec2 uv, float t){
-             float s = staticDrops(uv, t)*0.55;
-             vec2 m1 = dropLayer2(uv, t)*0.95;
-             vec2 m2 = dropLayer2(uv*1.85, t)*0.55;
+             float s = staticDrops(uv, t)*0.32;          // fewer static beads
+             vec2 m1 = dropLayer2(uv, t)*0.60;           // fewer falling drops
+             vec2 m2 = dropLayer2(uv*1.85, t)*0.35;
              float c = s+m1.x+m2.x;
-             c = wS(.3,1.,c);
+             c = wS(.45,1.,c);                            // higher threshold → sparser
              return vec2(c, max(m1.y, m2.y));
            }`
         );
@@ -1377,7 +1495,7 @@
            if (uWet > 0.001) {
              // object-space UV over the letter face; scaled so drops read
              // at a believable physical size on the glyph surface.
-             vec2 wuv = vWetPos.xy * 0.075 + vec2(0.5, 0.5);
+             vec2 wuv = vWetPos.xy * 0.11 + vec2(0.5, 0.5);  // higher scale → smaller drops
              float tt = uTime * 0.30;
              vec2 fld = dropField(wuv, tt);
              float height = fld.x;          // wet thickness (drops + trails)
@@ -1407,7 +1525,20 @@
            // water rather than flat speckle.
            float bead = uWet * wetMask;
            gl_FragColor.rgb += vec3(0.70, 0.85, 1.0) * pow(bead, 2.2) * 0.85
-                             + vec3(0.30, 0.45, 0.62) * bead * 0.30;`
+                             + vec3(0.30, 0.45, 0.62) * bead * 0.30;
+           // blue fresnel rim + soft inner glow so the glass letters stay
+           // visible against the dark water (greninja/underwater only, via
+           // uWet — rayquaza glass is untouched). Brightest at glancing
+           // edges (fresnel) with a gentle all-over cool fill.
+           {
+             vec3 vd = normalize(vViewPosition);
+             float fres = pow(1.0 - clamp(dot(normalize(normal), vd), 0.0, 1.0), 2.5);
+             vec3 rimCol = vec3(0.25, 0.62, 1.0);   // cool blue
+             // music-reactive: the blue rim/glow swells with the beat
+             float glow = uWet * (0.9 + uPulse * 1.1);
+             gl_FragColor.rgb += rimCol * fres * glow;                       // glowing edge
+             gl_FragColor.rgb += vec3(0.10, 0.28, 0.5) * uWet * (0.18 + uPulse * 0.22); // soft fill
+           }`
         );
       };
       mat.needsUpdate = true;
@@ -1464,7 +1595,14 @@
           iridescenceThicknessRange:    [120, 420],
           dispersion: 0.2,
           transparent: true,
-          side: THREE.DoubleSide
+          side: THREE.DoubleSide,
+          // CRITICAL: exempt the glass from scene.fog. Underwater the
+          // FogExp2 water haze would otherwise wash the letters into a
+          // flat blue blob; keeping fog off the glass lets it stay clear,
+          // refractive and legible (it still picks up a cool tint via the
+          // water it refracts/reflects, which reads as realistically
+          // submerged glass without dissolving into the background).
+          fog: false
         });
         installWetGlass(mat);   // wet-glass shader (inert until uWet > 0)
         pkText = new THREE.Mesh(geo, mat);
@@ -1497,14 +1635,19 @@
     // load time so it occupies GRENINJA_TARGET_SIZE world units (matching
     // Rayquaza's visual footprint in front of the camera); these offsets
     // then nudge it into the same pocket between the "pk" letters.
-    const GRENINJA_TARGET_SIZE = 15;   // longest bbox dimension, world units
-                                       // (Rayquaza measures ~21.5; Greninja is
-                                       // humanoid/compact so it reads big — keep
-                                       // its longest dim a touch under Rayquaza's)
-    const GRENINJA_Y_OFFSET    = 0;    // centered in the gap (was -2, sat low)
-    const GRENINJA_X_OFFSET    = 0;    // just left of the slight-right nudge, near the "pk" center
-    const GRENINJA_Z_OFFSET    = 0;
-    const GRENINJA_CLIP        = 'pm0725_51_00_20001_battlewait01_loop'; // idle loop
+    const GRENINJA_TARGET_SIZE = 19;   // longest bbox dimension, world units.
+                                       // gyarados is pulled toward camera (see
+                                       // Z_OFFSET) to clear the heavy underwater
+                                       // FogExp2 that swallows anything in
+                                       // rayquaza's z-plane; closer ⇒ bigger on
+                                       // screen, so ~19 reads at rayquaza's
+                                       // footprint (rayquaza ≈21.5 at z≈0).
+    const GRENINJA_Y_OFFSET    = 0;    // centered in the gap
+    const GRENINJA_X_OFFSET    = -1;   // match rayquaza's MODEL_X_OFFSET (-1)
+    const GRENINJA_Z_OFFSET    = 20;   // pull toward camera (+z) so the serpent
+                                       // sits IN FRONT of the underwater fog and
+                                       // actually reads (in-plane it vanishes).
+    const GRENINJA_CLIP        = null; // gyarados is a static rigid mesh — no baked clips
 
     // dispose helper — frees geometries + materials (+ their textures) for
     // a subtree so repeated switching doesn't leak GPU memory.
@@ -1634,9 +1777,13 @@
     function loadGreninja() {
       return new Promise((resolve, reject) => {
         if (greninjaModel) { resolve(greninjaModel); return; }
-        new GLTFLoader().load('pokemon/mega_greninja_za.glb',
+        new GLTFLoader().load('pokemon/gyarados.glb',
           (gltf) => {
             const g = gltf.scene;
+
+            // gyarados is a Sketchfab static mesh exported Z-up; rotate so the
+            // serpent lies horizontal/upright across the frame like rayquaza.
+            g.rotation.x = -Math.PI / 2;
 
             // auto-fit: scale so the longest bbox dimension == target size.
             g.updateMatrixWorld(true);
@@ -1667,19 +1814,25 @@
               }
             });
 
-            // mixer + baked clip. Prefer the named idle loop; fall back to
-            // the first available clip if the name ever changes.
-            greninjaMixer = new THREE.AnimationMixer(g);
-            const clip =
-              THREE.AnimationClip.findByName(gltf.animations, GRENINJA_CLIP)
-              || gltf.animations[0];
+            // gyarados ships with NO baked clips and NO skeleton, so there is
+            // nothing for an AnimationMixer to drive — leave it null and animate
+            // the whole group procedurally in tick(). Guard the clip lookup so
+            // an empty animations array never throws.
+            greninjaMixer = null;
+            const clips = gltf.animations || [];
+            const clip = (GRENINJA_CLIP && clips.length)
+              ? (THREE.AnimationClip.findByName(clips, GRENINJA_CLIP) || clips[0])
+              : (clips.length ? clips[0] : null);
             if (clip) {
+              greninjaMixer = new THREE.AnimationMixer(g);
               const action = greninjaMixer.clipAction(clip);
               action.setLoop(THREE.LoopRepeat, Infinity);
               action.play();
             }
-            log(`greninja loaded · scale ${s.toFixed(3)} · clip ${clip ? clip.name : 'none'} · ${gltf.animations.length} clips`);
+            log(`gyarados loaded · scale ${s.toFixed(3)} · clip ${clip ? clip.name : 'none (procedural)'} · ${clips.length} clips`);
 
+            g.userData.baseRotX = g.rotation.x;   // preserve orientation correction
+            window.__DBG = { g, THREE, camera, scene, get cur(){return currentPokemon;} }; // TEMP-DEBUG
             greninjaModel = g;
             resolve(g);
           },
@@ -1701,7 +1854,7 @@
 
       try {
         if (next === 'greninja') {
-          if (pokeName) pokeName.textContent = greninjaModel ? 'greninja' : 'loading…';
+          if (pokeName) pokeName.textContent = greninjaModel ? 'gyarados' : 'loading…';
           await loadGreninja();
           if (model) scene.remove(model);            // pull rayquaza out
           greninjaModel.position.copy(greninjaModel.userData.basePos);
@@ -1711,18 +1864,15 @@
           scene.add(greninjaModel);
           installGreninjaRim(greninjaModel);          // cyan fresnel aura
           currentPokemon = 'greninja';
-          if (pokeName) pokeName.textContent = 'greninja';
-          // swap the WORLD: cosmic → rainy water scene
+          if (pokeName) pokeName.textContent = 'gyarados';
+          // swap the WORLD: cosmic → underwater scene
           if (window.__nebulaMesh)  window.__nebulaMesh.visible  = false;
           if (window.__starfield)   window.__starfield.visible   = false;
           if (window.__greninjaSky) window.__greninjaSky.visible = true;
-          if (rainMesh)             rainMesh.visible              = true;
-          // first storm flash a few seconds in; clear any stale flash
-          window.__stormFlash = 0;
-          window.__stormNextT = clock.getElapsedTime() + 2.5;
-          window.__stormLastT = clock.getElapsedTime();
-          if (greninjaSkyMat) greninjaSkyMat.uniforms.uFlash.value = 0;
-          scene.fog = new THREE.FogExp2(0x10161f, 0.0040);   // cool slate storm haze
+          if (snowMesh)             snowMesh.visible              = true;
+          // FogExp2 = the water volume: distant geometry fades into the
+          // blue-green haze (Beer–Lambert handled in the dome shader).
+          scene.fog = new THREE.FogExp2(UW_FOG_COLOR, UW_FOG_DENSITY);
         } else {
           if (greninjaModel) scene.remove(greninjaModel);
           if (model) scene.add(model);
@@ -1732,7 +1882,7 @@
           if (window.__nebulaMesh)  window.__nebulaMesh.visible  = true;
           if (window.__starfield)   window.__starfield.visible   = true;
           if (window.__greninjaSky) window.__greninjaSky.visible = false;
-          if (rainMesh)             rainMesh.visible              = false;
+          if (snowMesh)             snowMesh.visible              = false;
           scene.fog = null;
         }
       } catch (e) {
@@ -1812,6 +1962,9 @@
       updateLighting();
       // wet-glass ramp on the pk text: up for greninja, down for rayquaza
       pkWet.uTime.value = t;
+      // music-reactive blue glow on the glass (smoothed); harmless for
+      // rayquaza since the glow multiplies by uWet which is 0 there.
+      pkWet.uPulse.value += (amp - pkWet.uPulse.value) * 0.35;
       {
         const wetTarget = isGreninja ? 1 : 0;
         const dtWet = Math.min(0.05, t - (window.__wetLastT ?? t));
@@ -1819,30 +1972,27 @@
         const w = pkWet.uWet;
         w.value += Math.sign(wetTarget - w.value) * Math.min(Math.abs(wetTarget - w.value), WET_RAMP * dtWet);
       }
-      // drive the fullscreen rain-on-glass pass from the same wetness;
-      // enabled only while wet so rayquaza skips the pass entirely.
+      // fullscreen rain-on-glass pass STAYS DISABLED — it smeared/blurred
+      // the WHOLE view (text + model). Droplets now come ONLY from the
+      // per-letter installWetGlass injection on the pk glass, so the rest
+      // of the scene stays sharp.
       rainPass.uniforms.uWet.value  = pkWet.uWet.value;
       rainPass.uniforms.iTime.value = t;
-      rainPass.enabled = pkWet.uWet.value > 0.002;
+      rainPass.enabled = false;
       if (isGreninja) {
+        // advance the underwater dome (caustics scroll + god-ray drift) and
+        // feed the music amplitude so the scene PULSES with the beat
         if (greninjaSkyMat) {
           greninjaSkyMat.uniforms.uTime.value = t;
-          // distant storm-lightning flicker: occasionally kick a flash
-          // that decays out; sometimes a quick double-strike. Driven by
-          // `t` deltas so it's framerate-independent. greninja-only.
-          const dtF = Math.min(0.05, t - (window.__stormLastT ?? t));
-          window.__stormLastT = t;
-          let f = window.__stormFlash ?? 0;
-          f = Math.max(0, f - dtF * 4.5);                 // fast decay
-          if ((t - (window.__stormNextT ?? 0)) > 0) {
-            f = 0.6 + Math.random() * 0.5;                // strike
-            // schedule next strike 3–9s out; small chance of a quick re-flash
-            window.__stormNextT = t + (Math.random() < 0.3 ? 0.12 : 3 + Math.random() * 6);
-          }
-          window.__stormFlash = f;
-          greninjaSkyMat.uniforms.uFlash.value = f;
+          // smooth the reactive pulse a touch so it swells rather than flickers
+          const pu = greninjaSkyMat.uniforms.uPulse;
+          pu.value += (amp - pu.value) * 0.35;
         }
-        if (rainMesh && rainMesh.visible) updateRain(t);
+        // marine snow: drift + twinkle
+        if (snowMesh && snowMesh.visible) {
+          updateSnow(t);
+          snowMesh.material.uniforms.uTime.value = t;
+        }
         // cyan aura: strong fresnel rim with a subtle breathing pulse,
         // reacts a touch to audio. Tweak the 1.1 base for more/less glow.
         greninjaRim.intensity.value = 1.1 + Math.sin(t * 1.6) * 0.3 + amp * 0.5;
@@ -1909,17 +2059,35 @@
       }
       window.__lastT = t;
 
-      // greninja: advance the baked clip + a gentle idle drift. Runs ONLY
-      // while greninja is the shown pokemon; rayquaza's procedural block
-      // below is skipped in that case.
+      // GYARADOS — a static rigid mesh (no skeleton, no clips), so the WHOLE
+      // group is animated procedurally. Gyarados is a giant Chinese-dragon /
+      // sea-serpent: the motion is deliberately SLOW, HEAVY and MENACING (low
+      // frequency, generous amplitude — a big, powerful body, not a darting
+      // fish). It evokes serpentine swimming with whole-group cues:
+      //   • buoyancy BOB (slow vertical float)
+      //   • slow gliding X/Z drift (cruising through the water)
+      //   • a slow continuous YAW survey — it weaves side to side like it's
+      //     hunting, head leading
+      //   • COILING ROLL on z (the body winding through the current)
+      //   • a slow REARING PITCH on x (rising/sinking, head rears up)
+      // A subtle music-reactive boost (amp 0..1) lets it rear/sway a touch more
+      // on the beat. Runs ONLY while shown; driven by `t` (framerate-indep) and
+      // additive on basePos / baseRotX (the orientation correction).
       if (currentPokemon === 'greninja' && greninjaModel) {
         if (greninjaMixer) greninjaMixer.update(mixDt);
         const b = greninjaModel.userData.basePos;
         if (b) {
-          greninjaModel.position.x = b.x + GRENINJA_X_OFFSET + Math.sin(t * 0.21 + 0.5) * 0.4;
-          greninjaModel.position.y = b.y + GRENINJA_Y_OFFSET + Math.sin(t * 0.32) * 0.3;
-          greninjaModel.position.z = b.z + GRENINJA_Z_OFFSET;
-          greninjaModel.rotation.y = Math.sin(t * 0.17) * 0.12;
+          const react = 1 + amp * 0.5;                         // beat lift
+          // translation — slow, weighty cruise + buoyancy
+          greninjaModel.position.y = b.y + GRENINJA_Y_OFFSET + Math.sin(t * 0.26)        * 0.55 * react;
+          greninjaModel.position.x = b.x + GRENINJA_X_OFFSET + Math.sin(t * 0.15 + 0.5)  * 0.65;
+          greninjaModel.position.z = b.z + GRENINJA_Z_OFFSET + Math.sin(t * 0.13 + 1.2)  * 0.50;
+          const baseRotX = greninjaModel.userData.baseRotX || 0;
+          // rotation — coiling roll + slow hunting yaw + rearing pitch
+          greninjaModel.rotation.z =           Math.sin(t * 0.19)        * 0.13 * react;  // coil/wind
+          greninjaModel.rotation.y =           Math.sin(t * 0.11)        * 0.22            // wide menacing survey
+                                             + Math.sin(t * 0.045)       * 0.30;           // slow drifting hunt
+          greninjaModel.rotation.x = baseRotX + Math.sin(t * 0.16 + 0.6) * 0.10 * react;   // rear up / sink
         }
       }
 
