@@ -206,7 +206,25 @@
     .nav-clock .colon { animation: blink 1s step-end infinite; }
     @keyframes blink { 50% { opacity: 0; } }
 
-    /* ─── hero ─── */
+    /* ─── 3d hero (rayquaza scene iframe) ─── */
+    .hero-3d {
+      position: relative;
+      width: 100%;
+      height: 100svh;
+      min-height: 100svh;
+      overflow: hidden;
+      background: #000;
+    }
+    .hero-3d .hero-frame {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+    }
+
+    /* ─── (original) hero ─── */
     .hero {
       min-height: 100dvh;
       padding: calc(var(--nav-h) + 12vh) var(--pad) 8vh;
@@ -1489,6 +1507,28 @@
         transition-duration: 0.001ms !important;
       }
     }
+    /* ────────────────────────────────────────────────────────────────
+       PERF OVERRIDES — last block in <style> so it wins specificity.
+       To revert any of these, just delete the rule from this block.
+       ──────────────────────────────────────────────────────────────── */
+    /* (#2) restore native cursor — the custom cursor canvas was cut.
+       previously the body + many interactive elements had cursor:none
+       so the JS-painted cursor could take over. */
+    body, .work-item, .case-back, .case-study, .case-title {
+      cursor: auto !important;
+    }
+    /* (#5) disable ambient looping animations — text-blue-shift,
+       glow-color-shift, blink. They burn cycles forever for visual
+       work the 3D hero now carries. Keeping the colors/styles, just
+       killing the animation declaration. */
+    .work-type,
+    .case-hero-corner,
+    .case-meta-key,
+    .case-title-text,
+    .case-eyebrow,
+    .nav-clock .colon {
+      animation: none !important;
+    }
   </style>
 </head>
 <body>
@@ -1542,6 +1582,22 @@
 </nav>
 
 <!-- ── hero ── -->
+<!-- NEW HERO: 3D rayquaza + pk scene embedded as an iframe.
+     Keeps the scene as one source of truth (rayquaza-flying-clean.html);
+     all refinements happen in that file and flow here on reload.
+     To revert: comment out this section and uncomment the OLD HERO below. -->
+<section class="hero hero-3d">
+  <iframe
+    src="rayquaza-flying-clean.html"
+    class="hero-frame"
+    title="praneel · 3d hero"
+    allow="autoplay; fullscreen"
+    loading="eager"
+    frameborder="0"></iframe>
+</section>
+
+<!-- OLD HERO (stashed — original dot-pattern hero). To restore: remove
+     the hero-3d section above and uncomment this block.
 <section class="hero">
   <div class="hero-bg"></div>
   <div class="hero-glow"></div>
@@ -1558,6 +1614,8 @@
     <span class="scroll-hint" id="scroll-hint">Scroll</span>
   </div>
 </section>
+-->
+
 
 <hr class="rule">
 
@@ -1622,7 +1680,8 @@
   </div>
 </section>
 
-<!-- ── marquee ── -->
+<!-- ── marquee (stashed — to restore, uncomment the block below) ── -->
+<!--
 <div class="marquee-strip" style="margin-top: clamp(48px,7vw,96px)">
   <div class="marquee-track" aria-hidden="true">
     <span>Design</span><span class="dot">Development</span><span class="dot">Praneel Khiantani</span>
@@ -1631,6 +1690,7 @@
     <span class="dot">UI/UX</span><span class="dot">Product</span><span class="dot">Creative Direction</span>
   </div>
 </div>
+-->
 
 <!-- ── about ── -->
 <section class="about" id="about">
@@ -1736,7 +1796,7 @@
 
 
 <!-- ── cursor ── -->
-<canvas id="cursor-canvas"></canvas>
+<!-- canvas cursor removed for performance (see IS_TOUCH override below) -->
 
 <!-- ── scripts ── -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
@@ -1871,10 +1931,11 @@
 
 
   /* ─── canvas cursor ─── */
-  // touch / coarse-pointer devices skip the whole custom cursor pipeline.
-  // CSS already hides the canvas; we also skip the JS so we don't burn a
-  // pointermove → RAF loop nobody can see.
-  const IS_TOUCH = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+  // CUT for performance — custom cursor was its own canvas + RAF on top
+  // of the 3D hero's WebGL context. We force IS_TOUCH=true here so the
+  // entire pipeline below short-circuits and never spins up. To restore:
+  // change this back to the matchMedia query.
+  const IS_TOUCH = true;
   const cc   = document.getElementById('cursor-canvas');
   const cctx = !IS_TOUCH && cc ? cc.getContext('2d') : null;
 
@@ -2756,6 +2817,33 @@
 
     window.addEventListener('resize', resizeToCurrent);
   }
+
+  /* ─── (#1) pause the 3D hero iframe when scrolled off-screen ───────
+     IntersectionObserver watches .hero-3d. When the section leaves the
+     viewport we postMessage 'pause' into the iframe, which stops its
+     RAF loop and suspends its AudioContext. When it scrolls back, we
+     resume. Big perf win for the rest of the page where the rayquaza
+     scene was previously rendering full-tilt off-screen. */
+  (function () {
+    const heroEl = document.querySelector('.hero-3d');
+    if (!heroEl) return;
+    const frame = heroEl.querySelector('iframe.hero-frame');
+    if (!frame) return;
+    let paused = false;
+    const send = (action) => {
+      if (frame.contentWindow) {
+        frame.contentWindow.postMessage({ __heroAction: action }, '*');
+      }
+    };
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const visible = e.isIntersecting && e.intersectionRatio > 0.02;
+        if (visible && paused)     { paused = false; send('resume'); }
+        else if (!visible && !paused) { paused = true;  send('pause');  }
+      }
+    }, { threshold: [0, 0.02, 0.1] });
+    io.observe(heroEl);
+  })();
 </script>
 
 </body>

@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>rayquaza · sky flight</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
+                 background: #67c0ff; color: #fff;
+                 font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+    #c { display: block; width: 100vw; height: 100vh; }
+    #err { position: fixed; inset: auto 14px 14px 14px; color: #ff8585;
+           background: rgba(40,0,0,0.85); padding: 10px 14px; border-radius: 4px;
+           font-size: 12px; display: none; white-space: pre-wrap; max-height: 40vh; overflow: auto; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="err"></div>
+
+  <script>
+    const errEl = document.getElementById('err');
+    function showErr(msg) {
+      errEl.style.display = 'block';
+      errEl.textContent = (errEl.textContent ? errEl.textContent + '\n\n' : '') + msg;
+    }
+    window.addEventListener('error', e => showErr('Error: ' + e.message + (e.filename ? '\n  at ' + e.filename + ':' + e.lineno : '')));
+    window.addEventListener('unhandledrejection', e => showErr('Promise rejection: ' + (e.reason?.message || e.reason)));
+  </script>
+
+  <script type="module">
+    import * as THREE from 'https://esm.sh/three@0.160';
+    import { GLTFLoader }    from 'https://esm.sh/three@0.160/examples/jsm/loaders/GLTFLoader.js';
+    import { RoomEnvironment } from 'https://esm.sh/three@0.160/examples/jsm/environments/RoomEnvironment.js';
+
+    /* -----------------------------------------------------------
+       renderer
+       ----------------------------------------------------------- */
+    const canvas   = document.getElementById('c');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace    = THREE.SRGBColorSpace;
+    renderer.toneMapping         = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.25;
+
+    const scene  = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 4000);
+    camera.position.set(0, 6, 55);
+
+    // PBR materials need an environment to reflect or they read pitch
+    // black on metallic surfaces. RoomEnvironment is a built-in
+    // procedural studio that gives every material a natural light bath.
+    // We bake it into a PMREM cubemap and assign as scene.environment.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    /* -----------------------------------------------------------
+       stylized sky — inverted sphere with a custom vertical gradient
+       written in a tiny shader. cheap, vibrant, exactly the
+       "anime opening" feel — no IBL fidelity, just a backdrop.
+       ----------------------------------------------------------- */
+    {
+      const skyGeo = new THREE.SphereGeometry(1500, 32, 16);
+      const skyMat = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        uniforms: {
+          uHorizon: { value: new THREE.Color('#bfe6ff') }, // very light at the horizon
+          uMid:     { value: new THREE.Color('#67c0ff') }, // bright cyan mid
+          uZenith:  { value: new THREE.Color('#1d5fb8') }, // saturated blue at top
+        },
+        vertexShader: `
+          varying vec3 vWorld;
+          void main() {
+            vec4 wp = modelMatrix * vec4(position, 1.0);
+            vWorld = wp.xyz;
+            gl_Position = projectionMatrix * viewMatrix * wp;
+          }
+        `,
+        fragmentShader: `
+          varying vec3 vWorld;
+          uniform vec3 uHorizon;
+          uniform vec3 uMid;
+          uniform vec3 uZenith;
+          void main() {
+            // normalized height: -1 (bottom) → +1 (top)
+            float h = normalize(vWorld).y;
+            // blend horizon → mid (lower half) and mid → zenith (upper)
+            vec3 col;
+            if (h < 0.15) {
+              float t = smoothstep(-0.2, 0.15, h);
+              col = mix(uHorizon, uMid, t);
+            } else {
+              float t = smoothstep(0.15, 0.9, h);
+              col = mix(uMid, uZenith, t);
+            }
+            // very gentle sun-bloom warmth low on one side, painterly feel
+            float warm = smoothstep(0.55, 0.0, h) * smoothstep(0.4, 1.0, normalize(vWorld).x);
+            col += vec3(0.07, 0.04, 0.0) * warm;
+            gl_FragColor = vec4(col, 1.0);
+          }
+        `,
+      });
+      const sky = new THREE.Mesh(skyGeo, skyMat);
+      sky.renderOrder = -1;
+      scene.add(sky);
+    }
+
+    /* -----------------------------------------------------------
+       stylized clouds — large textured quads with a soft circular
+       alpha falloff. We bake the texture in a 2D canvas so we
+       don't need any extra asset. Each cloud gets a different
+       size/rotation/drift so it doesn't feel tiled.
+       ----------------------------------------------------------- */
+    function makeCloudTexture() {
+      const s = 256;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = s;
+      const ctx = cv.getContext('2d');
+      // base radial fade
+      const g = ctx.createRadialGradient(s/2, s/2, s*0.05, s/2, s/2, s*0.5);
+      g.addColorStop(0.0, 'rgba(255,255,255,0.95)');
+      g.addColorStop(0.4, 'rgba(255,255,255,0.55)');
+      g.addColorStop(0.8, 'rgba(255,255,255,0.08)');
+      g.addColorStop(1.0, 'rgba(255,255,255,0.0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, s, s);
+      // stamp a few smaller circles on top for a lumpy painted-cloud silhouette
+      for (let i = 0; i < 14; i++) {
+        const r = 25 + Math.random() * 55;
+        const x = s/2 + (Math.random() - 0.5) * s * 0.55;
+        const y = s/2 + (Math.random() - 0.5) * s * 0.35;
+        const lg = ctx.createRadialGradient(x, y, 2, x, y, r);
+        lg.addColorStop(0, 'rgba(255,255,255,0.55)');
+        lg.addColorStop(1, 'rgba(255,255,255,0.0)');
+        ctx.fillStyle = lg;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    const cloudTex = makeCloudTexture();
+    const cloudGroup = new THREE.Group();
+    scene.add(cloudGroup);
+
+    const cloudCount = 26;
+    const clouds = [];
+    for (let i = 0; i < cloudCount; i++) {
+      const mat = new THREE.MeshBasicMaterial({
+        map: cloudTex,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.85 + Math.random() * 0.15,
+        // slight tint variation: pure white to warm-cream to cool-mauve
+        color: new THREE.Color().lerpColors(
+          new THREE.Color('#ffffff'),
+          new THREE.Color(Math.random() < 0.5 ? '#fff4d8' : '#dbe9ff'),
+          Math.random() * 0.6
+        ),
+        toneMapped: false, // keep them poppy and bright
+      });
+      const w = 80 + Math.random() * 140;
+      const h = w * (0.35 + Math.random() * 0.25);
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+
+      // spread around the scene in a ring around the camera flight area
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 220 + Math.random() * 380;
+      m.position.set(
+        Math.cos(angle) * radius,
+        -40 + Math.random() * 140,
+        Math.sin(angle) * radius
+      );
+      // face roughly toward the origin but with a tilt
+      m.rotation.z = (Math.random() - 0.5) * 0.6;
+      m.userData.driftSpeed = 0.6 + Math.random() * 1.6;
+      m.userData.bobPhase   = Math.random() * Math.PI * 2;
+      clouds.push(m);
+      cloudGroup.add(m);
+    }
+
+    /* -----------------------------------------------------------
+       lighting — cel-shaded style means we ditch fancy IBL and go
+       hard with directional + hemi + ambient. Generous ambient
+       so the model never reads dark, sky-colored hemi for the
+       day-time wash, warm key from the upper-right.
+       ----------------------------------------------------------- */
+    scene.add(new THREE.AmbientLight(0xffffff, 1.15));
+    const hemi = new THREE.HemisphereLight(0xbfe6ff, 0x4a78c8, 1.0);
+    scene.add(hemi);
+
+    const key = new THREE.DirectionalLight(0xfff4dc, 2.4);
+    key.position.set(40, 60, 30);
+    scene.add(key);
+
+    const fill = new THREE.DirectionalLight(0xb8d8ff, 1.1);
+    fill.position.set(-40, 25, -20);
+    scene.add(fill);
+
+    const rim = new THREE.DirectionalLight(0xffffff, 1.4);
+    rim.position.set(-10, 20, -60);
+    scene.add(rim);
+
+    /* -----------------------------------------------------------
+       flight curve — closed catmull-rom loop with banks, climbs,
+       and a dive. Tuned to keep the model fairly central with
+       sweeping passes near the camera.
+       ----------------------------------------------------------- */
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3( 12,  4,  -8),
+      new THREE.Vector3(  8, 10,   6),
+      new THREE.Vector3( -4,  8,  10),
+      new THREE.Vector3(-12,  2,   2),
+      new THREE.Vector3( -8, -3,  -8),
+      new THREE.Vector3(  0,  0, -12),
+      new THREE.Vector3(  6,  5,  -8),
+      new THREE.Vector3( 12,  3,   0),
+    ], true, 'catmullrom', 0.5);
+
+    /* -----------------------------------------------------------
+       model load + material tweaks
+       ----------------------------------------------------------- */
+    let model = null;
+    const modelHolder = new THREE.Group();
+    scene.add(modelHolder);
+
+    new GLTFLoader().load('rayquaza/rayquaza.glb', (gltf) => {
+      model = gltf.scene;
+
+      // normalize size — scale so the longest axis is ~22 units
+      const box  = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(new THREE.Vector3()).length();
+      const scale = 22 / size;
+      model.scale.setScalar(scale);
+
+      // (don't translate model to center — its pivot is fine as-is)
+
+      // adjust materials: GLB ships with metalness=1 which without IBL
+      // reads pitch black. We rely on scene.environment (RoomEnvironment)
+      // for IBL, plus we soften metalness to keep the green poppy.
+      model.traverse(o => {
+        if (o.isMesh && o.material) {
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          mats.forEach(m => {
+            if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.2);
+            if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.5);
+            // envMapIntensity stays at default so scene.environment lights it
+            m.envMapIntensity = 1.0;
+            m.needsUpdate = true;
+          });
+          o.frustumCulled = false;
+        }
+      });
+
+      // BAKE skinning: compute skinned vertex positions using the
+      // rest-pose skeleton and replace each SkinnedMesh with a plain
+      // Mesh whose geometry holds those positions. This turns the
+      // model into a static mesh that responds to plain
+      // model.position/rotation/scale changes — no skeleton magic.
+      const skinnedMeshes = [];
+      model.traverse(o => { if (o.isSkinnedMesh) skinnedMeshes.push(o); });
+
+      for (const sm of skinnedMeshes) {
+        sm.updateMatrixWorld(true);
+        sm.skeleton.update();
+        const geom = sm.geometry.clone();
+        const posAttr   = geom.attributes.position;
+        const skinIdx   = geom.attributes.skinIndex;
+        const skinWgt   = geom.attributes.skinWeight;
+        const out       = new Float32Array(posAttr.count * 3);
+        const v         = new THREE.Vector3();
+        const skinned   = new THREE.Vector3();
+        const temp      = new THREE.Vector3();
+        const boneMat   = new THREE.Matrix4();
+        const bones     = sm.skeleton.bones;
+        const boneInv   = sm.skeleton.boneInverses;
+
+        for (let i = 0; i < posAttr.count; i++) {
+          v.fromBufferAttribute(posAttr, i);
+          // bring into bind-space if attached mode — but we want rest-pose
+          // world position in the local frame of the SkinnedMesh
+          skinned.set(0, 0, 0);
+          for (let w = 0; w < 4; w++) {
+            const bi = skinIdx.getComponent(i, w);
+            const wt = skinWgt.getComponent(i, w);
+            if (wt <= 0) continue;
+            boneMat.multiplyMatrices(bones[bi].matrixWorld, boneInv[bi]);
+            temp.copy(v).applyMatrix4(boneMat);
+            skinned.addScaledVector(temp, wt);
+          }
+          out[i*3+0] = skinned.x;
+          out[i*3+1] = skinned.y;
+          out[i*3+2] = skinned.z;
+        }
+        geom.setAttribute('position', new THREE.BufferAttribute(out, 3));
+        geom.deleteAttribute('skinIndex');
+        geom.deleteAttribute('skinWeight');
+        geom.computeVertexNormals();
+        geom.computeBoundingSphere();
+        geom.computeBoundingBox();
+
+        const staticMesh = new THREE.Mesh(geom, sm.material);
+        staticMesh.name = sm.name;
+        staticMesh.frustumCulled = false;
+        sm.parent.add(staticMesh);
+        sm.parent.remove(sm);
+      }
+
+      // Now the model is a tree of plain Meshes. Re-measure and
+      // center it on its bbox so the holder's transforms work cleanly.
+      const finalBox = new THREE.Box3().setFromObject(model);
+      const center   = finalBox.getCenter(new THREE.Vector3());
+      model.position.sub(center);
+
+      modelHolder.add(model);
+      model.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
+    }, undefined, (err) => {
+      showErr('GLTFLoader error: ' + (err.message || err));
+    });
+
+    /* -----------------------------------------------------------
+       animation loop
+       ----------------------------------------------------------- */
+    const clock = new THREE.Clock();
+    let t0 = 0;
+    const loopDur = 17; // seconds per flight loop
+
+    // helpers reused each frame
+    const _pos      = new THREE.Vector3();
+    const _tangent  = new THREE.Vector3();
+    const _up       = new THREE.Vector3(0, 1, 0);
+    const _m        = new THREE.Matrix4();
+    const _q        = new THREE.Quaternion();
+    const _qBank    = new THREE.Quaternion();
+    const _qSnake   = new THREE.Quaternion();
+    const _zAxis    = new THREE.Vector3(0, 0, 1);
+
+    function tick() {
+      requestAnimationFrame(tick);
+      const dt = clock.getDelta();
+      t0 += dt;
+
+      // ---- clouds drift slowly across the sky. Subtle parallax —
+      // closer clouds drift faster (encoded in driftSpeed). Always
+      // billboard toward the camera so they read as flat painted shapes.
+      for (const c of clouds) {
+        c.position.x += dt * c.userData.driftSpeed * 1.5;
+        c.position.y += Math.sin(t0 * 0.3 + c.userData.bobPhase) * dt * 0.4;
+        if (c.position.x > 600) c.position.x = -600;
+        if (c.position.x < -600) c.position.x = 600;
+        c.lookAt(camera.position);
+      }
+
+      // ---- model along the flight curve. Pose follows tangent so the
+      // head leads; bank on turns; gentle snake roll for life.
+      if (model) {
+        const T = (t0 % loopDur) / loopDur;
+        curve.getPointAt(T, _pos);
+        curve.getTangentAt(T, _tangent).normalize();
+
+        // orient: aim model's -Z axis along the tangent
+        const lookTarget = _pos.clone().add(_tangent);
+        _m.lookAt(_pos, lookTarget, _up);
+        _q.setFromRotationMatrix(_m);
+
+        // banking on turns
+        const futureTan = curve.getTangentAt((T + 0.01) % 1).normalize();
+        const turn = new THREE.Vector3().crossVectors(_tangent, futureTan);
+        const bank = THREE.MathUtils.clamp(turn.y * 35, -1.0, 1.0);
+        _qBank.setFromAxisAngle(_zAxis, bank);
+
+        // snake undulation
+        _qSnake.setFromAxisAngle(_zAxis, Math.sin(t0 * 2.2) * 0.10);
+
+        _q.multiply(_qBank).multiply(_qSnake);
+
+        modelHolder.position.copy(_pos);
+        modelHolder.quaternion.copy(_q);
+      }
+
+      // ---- camera — cinematic frame. The camera drifts in a slow
+      // small arc and tracks the model with a tiny lag so the
+      // composition breathes. Wide enough to keep the whole
+      // serpent body visible.
+      const camAngle = Math.sin(t0 * 0.05) * 0.3;
+      const camR     = 40;
+      camera.position.set(
+        Math.sin(camAngle) * camR,
+        10 + Math.sin(t0 * 0.13) * 2.5,
+        Math.cos(camAngle) * camR + 4,
+      );
+      camera.lookAt(model ? _pos : new THREE.Vector3(0, 4, 0));
+
+
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    tick();
+  </script>
+</body>
+</html>

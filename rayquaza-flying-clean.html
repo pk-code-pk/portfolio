@@ -1,0 +1,1101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>rayquaza · flying (clean)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden;
+                 font-family: ui-monospace, 'SF Mono', Menlo, monospace; color: #fff; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #status { position: fixed; bottom: 12px; left: 14px; font-size: 12px;
+              color: rgba(255,255,255,0.85); background: rgba(0,0,0,0.55);
+              padding: 6px 10px; border-radius: 3px; }
+    #err    { position: fixed; left: 14px; right: 14px; top: 14px;
+              background: rgba(60,0,0,0.85); color: #ffd0d0; font-size: 12px;
+              padding: 10px 14px; border-radius: 4px; white-space: pre-wrap;
+              display: none; max-height: 50vh; overflow: auto; z-index: 10; }
+
+    /* music player — bottom-center, blur backdrop */
+    #music-player {
+      position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 18px;
+      padding: 10px 18px;
+      background: rgba(10, 12, 22, 0.55);
+      backdrop-filter: blur(14px) saturate(120%);
+      -webkit-backdrop-filter: blur(14px) saturate(120%);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 999px;
+      z-index: 5;
+      user-select: none;
+    }
+    #music-toggle {
+      background: none; border: none; padding: 4px;
+      color: rgba(255,255,255,0.8); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: color .25s, transform .2s;
+    }
+    #music-toggle:hover { color: #fff; transform: scale(1.08); }
+    #music-toggle svg { width: 18px; height: 18px; display: block; }
+
+    /* ElasticSlider — vanilla port of React Bits component */
+    .slider-wrapper {
+      display: flex; align-items: center; gap: 12px;
+      width: 200px; touch-action: none; user-select: none;
+      transition: transform .22s cubic-bezier(.23,1,.32,1), opacity .22s;
+      opacity: 0.7;
+    }
+    .slider-wrapper.is-hover { transform: scale(1.18); opacity: 1; }
+    .slider-wrapper .vol-icon {
+      width: 16px; height: 16px; color: rgba(255,255,255,0.65);
+      display: flex; align-items: center; justify-content: center;
+      transform: translateX(0);
+      transition: transform .22s cubic-bezier(.23,1,.32,1);
+    }
+    .slider-wrapper .vol-icon svg { width: 16px; height: 16px; display: block; }
+    .slider-root {
+      position: relative; flex: 1;
+      cursor: grab; padding: 14px 0;
+      touch-action: none;
+    }
+    .slider-root:active { cursor: grabbing; }
+    .slider-track-wrap {
+      transform-origin: center;
+      transition: height .22s ease, margin .22s ease;
+    }
+    .slider-wrapper.is-hover .slider-track-wrap {
+      /* fattens on hover */
+    }
+    .slider-track {
+      position: relative;
+      height: 4px;
+      background: rgba(255,255,255,0.18);
+      border-radius: 999px;
+      overflow: hidden;
+      transition: height .22s ease;
+    }
+    .slider-wrapper.is-hover .slider-track { height: 8px; }
+    .slider-range {
+      position: absolute; left: 0; top: 0; bottom: 0;
+      background: rgba(255,255,255,0.85);
+      border-radius: 999px;
+      width: 25%;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="status">loading…</div>
+  <div id="err"></div>
+  <audio id="bg-audio" src="music/bg-music.mp3" loop preload="auto"></audio>
+
+  <!-- music player: play toggle + elastic volume slider -->
+  <div id="music-player">
+    <button id="music-toggle" aria-label="Toggle music">
+      <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+        <path d="M8 5v14l11-7L8 5z"/>
+      </svg>
+      <svg id="icon-pause" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M6 5h4v14H6zM14 5h4v14h-4z"/>
+      </svg>
+    </button>
+    <div class="slider-wrapper" id="vol-wrapper">
+      <div class="vol-icon left">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 9v6h4l5 4V5L9 9H5z"/></svg>
+      </div>
+      <div class="slider-root" id="vol-root">
+        <div class="slider-track-wrap" id="vol-trackwrap">
+          <div class="slider-track">
+            <div class="slider-range" id="vol-range"></div>
+          </div>
+        </div>
+      </div>
+      <div class="vol-icon right">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 4V5L7 9H3zm10.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- elastic slider + player controls -->
+  <script>
+    (function () {
+      const audio   = document.getElementById('bg-audio');
+      const wrapper = document.getElementById('vol-wrapper');
+      const root    = document.getElementById('vol-root');
+      const range   = document.getElementById('vol-range');
+      const trackwrap = document.getElementById('vol-trackwrap');
+      const leftIcon  = wrapper.querySelector('.vol-icon.left');
+      const rightIcon = wrapper.querySelector('.vol-icon.right');
+      const toggleBtn = document.getElementById('music-toggle');
+      const iconPlay  = document.getElementById('icon-play');
+      const iconPause = document.getElementById('icon-pause');
+
+      const MAX_OVERFLOW = 50;
+      const sigmoidDecay = (v, max) => {
+        if (max === 0) return 0;
+        const e = v / max;
+        return (2 * (1 / (1 + Math.exp(-e)) - 0.5)) * max;
+      };
+
+      let value     = 25;          // 0..100
+      let overflow  = 0;           // pixels past edge
+      let dragging  = false;
+      let region    = 'middle';    // 'left' | 'middle' | 'right'
+
+      function syncRange() {
+        range.style.width = value + '%';
+        const v = Math.max(0, Math.min(1, value / 100));
+        // prefer the Web Audio GainNode (volume-independent of analyser);
+        // fall back to the element's own volume before audio init runs.
+        if (window.__gain) window.__gain.gain.value = v;
+        else                audio.volume = v;
+      }
+      function syncTrack() {
+        const rect = root.getBoundingClientRect();
+        const sx = 1 + Math.abs(overflow) / Math.max(1, rect.width);
+        const sy = 1 - (Math.abs(overflow) / MAX_OVERFLOW) * 0.2;   // squish vertical 1 → 0.8
+        const origin = region === 'left' ? 'right' : 'left';
+        trackwrap.style.transformOrigin = origin + ' center';
+        trackwrap.style.transform = `scaleX(${sx}) scaleY(${sy})`;
+      }
+      function syncIcons() {
+        const off = sigmoidDecay(Math.abs(overflow), MAX_OVERFLOW);
+        leftIcon.style.transform  = region === 'left'  ? `translateX(${-off}px) scale(1.25)` : 'translateX(0) scale(1)';
+        rightIcon.style.transform = region === 'right' ? `translateX(${ off}px) scale(1.25)` : 'translateX(0) scale(1)';
+      }
+
+      function onMove(e) {
+        const rect = root.getBoundingClientRect();
+        // clamped position → value
+        const x = e.clientX;
+        let v = ((x - rect.left) / rect.width) * 100;
+        v = Math.max(0, Math.min(100, v));
+        value = v;
+        syncRange();
+        // overflow when finger goes past edges
+        if (x < rect.left) {
+          region = 'left';
+          overflow = -sigmoidDecay(rect.left - x, MAX_OVERFLOW);
+        } else if (x > rect.right) {
+          region = 'right';
+          overflow = sigmoidDecay(x - rect.right, MAX_OVERFLOW);
+        } else {
+          region = 'middle';
+          overflow = 0;
+        }
+        syncTrack();
+        syncIcons();
+      }
+
+      function springBack() {
+        const start = overflow;
+        const t0 = performance.now();
+        const dur = 360;
+        function step(now) {
+          const t = Math.min(1, (now - t0) / dur);
+          // critically-damped-ish ease: out cubic with bounce
+          const eased = 1 - Math.pow(1 - t, 3);
+          overflow = start * (1 - eased);
+          syncTrack();
+          syncIcons();
+          if (t < 1) requestAnimationFrame(step);
+          else { overflow = 0; region = 'middle'; syncTrack(); syncIcons(); }
+        }
+        requestAnimationFrame(step);
+      }
+
+      root.addEventListener('pointerdown', e => {
+        dragging = true;
+        root.setPointerCapture(e.pointerId);
+        onMove(e);
+      });
+      root.addEventListener('pointermove', e => { if (dragging) onMove(e); });
+      function endDrag() {
+        if (!dragging) return;
+        dragging = false;
+        springBack();
+      }
+      root.addEventListener('pointerup', endDrag);
+      root.addEventListener('pointercancel', endDrag);
+      root.addEventListener('lostpointercapture', endDrag);
+
+      // hover scale on the whole slider
+      wrapper.addEventListener('pointerenter', () => wrapper.classList.add('is-hover'));
+      wrapper.addEventListener('pointerleave', () => wrapper.classList.remove('is-hover'));
+
+      // play / pause toggle
+      function refreshIcons() {
+        const playing = !audio.paused;
+        iconPlay.style.display  = playing ? 'none' : 'block';
+        iconPause.style.display = playing ? 'block' : 'none';
+      }
+      toggleBtn.addEventListener('click', () => {
+        if (audio.paused) audio.play(); else audio.pause();
+        refreshIcons();
+      });
+      audio.addEventListener('play',  refreshIcons);
+      audio.addEventListener('pause', refreshIcons);
+
+      // initial volume
+      syncRange();
+      refreshIcons();
+    })();
+  </script>
+
+  <script>
+    // surface script errors on screen instead of dying silently white
+    const errEl = document.getElementById('err');
+    function showErr(msg) {
+      errEl.style.display = 'block';
+      errEl.textContent = (errEl.textContent ? errEl.textContent + '\n\n' : '') + msg;
+    }
+    window.addEventListener('error', e => showErr('Error: ' + e.message + (e.filename ? '\n  at ' + e.filename + ':' + e.lineno + ':' + e.colno : '')));
+    window.addEventListener('unhandledrejection', e => showErr('Promise: ' + (e.reason?.stack || e.reason?.message || e.reason)));
+  </script>
+
+  <script type="module">
+    /*
+      Clean scene rebuild. Two design decisions that fix the problems
+      from build B:
+        1) The model stays at the origin (SkinnedMesh + skeleton intact).
+        2) The CAMERA flies around it on a curve, always looking back at
+           the model. Visually the model appears to be flying through the
+           sky; mechanically every bone is still addressable, so the
+           follow-up animation pass can drive the rig directly.
+
+      Lighting: three.js Sky shader → PMREMGenerator → scene.environment.
+      The bright sky becomes the IBL, which is what finally lets the
+      model's metallic surfaces show their actual color instead of black.
+    */
+    import * as THREE                       from 'https://esm.sh/three@0.160';
+    import { GLTFLoader }                   from 'https://esm.sh/three@0.160/examples/jsm/loaders/GLTFLoader.js';
+    import { FontLoader }                   from 'https://esm.sh/three@0.160/examples/jsm/loaders/FontLoader.js';
+    import { TextGeometry }                 from 'https://esm.sh/three@0.160/examples/jsm/geometries/TextGeometry.js';
+    import { Lensflare, LensflareElement }  from 'https://esm.sh/three@0.160/examples/jsm/objects/Lensflare.js';
+    import { EffectComposer }               from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/EffectComposer.js';
+    import { RenderPass }                   from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/RenderPass.js';
+    import { UnrealBloomPass }              from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/UnrealBloomPass.js';
+    import { OutputPass }                   from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/OutputPass.js';
+
+    const canvas = document.getElementById('c');
+    const status = document.getElementById('status');
+    const log = (m) => { status.textContent = m; };
+
+    /* ── renderer ─────────────────────────────────────────────────── */
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping      = THREE.NoToneMapping;
+    renderer.toneMappingExposure = 1.0;
+
+    /* ── scene ─────────────────────────────────────────────────────── */
+    const scene  = new THREE.Scene();
+    scene.background = new THREE.Color('#000000');
+    const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 4000);
+
+    /* ── nebula sphere (cosmic backdrop behind stars) ──────────────
+       Big inverted sphere with a procedural noise shader giving soft
+       purple/indigo cloud bands. Sits behind the starfield. Reads as
+       deep space dust, not flat black. */
+    {
+      const nebulaGeo = new THREE.SphereGeometry(1500, 48, 32);
+      const nebulaMat = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        toneMapped: false,
+        uniforms: {
+          uTime: { value: 0 },
+          uPulse: { value: 0 },   // audio amplitude 0..1, set every frame
+        },
+        vertexShader: /* glsl */`
+          varying vec3 vDir;
+          void main() {
+            vDir = normalize(position);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: /* glsl */`
+          varying vec3 vDir;
+          uniform float uTime;
+          uniform float uPulse;        // 0..1 audio amplitude
+
+          float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+          float noise(vec3 p){
+            vec3 i = floor(p); vec3 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float n =
+              mix(mix(mix(hash(i + vec3(0,0,0)), hash(i + vec3(1,0,0)), f.x),
+                      mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+                  mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+                      mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+            return n;
+          }
+          float fbm(vec3 p){
+            float v = 0.0; float a = 0.5;
+            for (int i = 0; i < 5; i++){ v += a * noise(p); p *= 2.05; a *= 0.5; }
+            return v;
+          }
+
+          void main(){
+            vec3 d = vDir;
+            float t = uTime * 0.010;
+            vec3 stretchA = vec3(2.6, 7.0, 1.4);
+            vec3 stretchB = vec3(5.0, 9.0, 2.2);
+            float n  = fbm(d * stretchA + vec3(t, -t * 0.4, t * 0.6));
+            float n2 = fbm(d * stretchB + vec3(-t * 0.7, t, -t * 0.3));
+
+            float h = d.y;
+            vec3 base = mix(vec3(0.001, 0.002, 0.008),
+                            vec3(0.008, 0.014, 0.038),
+                            smoothstep(-0.6, 0.8, h));
+
+            // BLUE palette — deep cobalt + electric cyan + soft steel
+            vec3 cobalt    = vec3(0.06, 0.18, 0.55);
+            vec3 electric  = vec3(0.10, 0.40, 0.85);
+            vec3 steel     = vec3(0.04, 0.12, 0.22);
+
+            float cloudA = smoothstep(0.66, 0.92, n);
+            float cloudB = smoothstep(0.72, 0.96, n2);
+            // audio pulse brightens the filaments without lifting the
+            // black floor — base stays dark, streaks breathe.
+            float pulseLift = 1.0 + uPulse * 1.2;
+            vec3 col = base
+              + cobalt   * cloudA * 0.22 * pulseLift
+              + electric * cloudA * cloudB * 0.18 * pulseLift
+              + steel    * cloudB * 0.06;
+
+            gl_FragColor = vec4(col, 1.0);
+          }`
+      });
+      const nebula = new THREE.Mesh(nebulaGeo, nebulaMat);
+      nebula.renderOrder = -2;          // behind everything
+      scene.add(nebula);
+      // expose so tick() can advance the noise time
+      window.__nebulaMat = nebulaMat;
+    }
+
+    /* ── soft circular point texture (used by stars + dust) ────────
+       Without a map, PointsMaterial renders each point as a hard
+       square. A canvas-painted radial gradient gives soft circular
+       falloff so points read as round, antialiased dots. */
+    const softDot = (() => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const g = c.getContext('2d');
+      const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grad.addColorStop(0.0, 'rgba(255,255,255,1.0)');
+      grad.addColorStop(0.4, 'rgba(255,255,255,0.55)');
+      grad.addColorStop(1.0, 'rgba(255,255,255,0.0)');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 64, 64);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = false;
+      return tex;
+    })();
+
+    /* ── starfield (in front of nebula) ────────────────────────────── */
+    {
+      const g = new THREE.BufferGeometry();
+      const N = 2400;
+      const arr = new Float32Array(N * 3);
+      const colArr = new Float32Array(N * 3);
+      for (let i = 0; i < N; i++) {
+        const r = 400 + Math.random() * 800;
+        const theta = Math.random() * Math.PI * 2;
+        const phi   = Math.acos(2 * Math.random() - 1);
+        arr[i*3+0] = r * Math.sin(phi) * Math.cos(theta);
+        arr[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+        arr[i*3+2] = r * Math.cos(phi);
+        // most stars are cool white, a few warm
+        const warm = Math.random() < 0.15;
+        const b = 0.5 + Math.random() * 0.5;
+        colArr[i*3+0] = warm ? b : b * 0.85;
+        colArr[i*3+1] = b * 0.92;
+        colArr[i*3+2] = warm ? b * 0.7 : b;
+      }
+      g.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+      g.setAttribute('color',    new THREE.BufferAttribute(colArr, 3));
+      const m = new THREE.PointsMaterial({
+        size: 1.4, vertexColors: true, transparent: true, opacity: 0.85,
+        map: softDot, alphaTest: 0.02, depthWrite: false,
+        // normal blending — additive was stacking and blowing out into
+        // glowy blobs against the dark bg.
+        blending: THREE.NormalBlending,
+      });
+      scene.add(new THREE.Points(g, m));
+    }
+
+    /* dust layer removed — was reading as ugly purple blobs against
+       the nebula. Starfield + nebula filaments carry the cosmic feel
+       on their own. */
+
+    /* ── procedural env map for chrome reflections ──────────────────
+       Pure metallic surfaces with metalness=1 read as pure black unless
+       there's an environment to reflect. We paint a synthetic cubemap
+       with a deep cool gradient and a few directional highlights so the
+       chrome shows actual depth — warm pinpoint highlight on one side
+       (mimics distant sun), cool rim on the other (reflected starfield),
+       deep blue zenith → black nadir. */
+    {
+      const envScene = new THREE.Scene();
+      const envGeo = new THREE.SphereGeometry(100, 32, 16);
+      const envMat = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        toneMapped: false,
+        depthWrite: false,
+        vertexShader: /* glsl */`
+          varying vec3 vDir;
+          void main() {
+            vDir = normalize(position);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: /* glsl */`
+          varying vec3 vDir;
+          void main() {
+            // dark base gradient: zenith deep indigo → nadir near-black
+            float h = vDir.y;
+            vec3 col = mix(vec3(0.005, 0.008, 0.02), vec3(0.06, 0.05, 0.12), smoothstep(-0.5, 0.7, h));
+
+            // warm sun highlight at +x/+y direction (gives the chrome a
+            // strong directional gleam to bounce)
+            vec3 sunDir = normalize(vec3(0.6, 0.55, 0.35));
+            float s = max(0.0, dot(vDir, sunDir));
+            col += pow(s, 28.0) * vec3(1.8, 1.4, 0.9);     // tight bright spot
+            col += pow(s, 4.0)  * vec3(0.35, 0.25, 0.15);  // soft falloff
+
+            // cool rim highlight from opposite (subtle blue rim on the dark side)
+            vec3 rimDir = normalize(vec3(-0.55, 0.15, -0.6));
+            float r = max(0.0, dot(vDir, rimDir));
+            col += pow(r, 8.0) * vec3(0.18, 0.30, 0.55);
+
+            gl_FragColor = vec4(col, 1.0);
+          }`
+      });
+      envScene.add(new THREE.Mesh(envGeo, envMat));
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      pmrem.compileEquirectangularShader();
+      scene.environment = pmrem.fromScene(envScene, 0.06).texture;
+    }
+
+    /* ── lights ───────────────────────────────────────────────────── */
+    // warm key matches the env's sun direction so highlights align
+    const sunLight = new THREE.DirectionalLight(0xfff0d8, 2.6);
+    sunLight.position.set(60, 55, 35);
+    scene.add(sunLight);
+    const rimLight = new THREE.DirectionalLight(0x5e8cff, 0.9);
+    rimLight.position.set(-55, 15, -60);
+    scene.add(rimLight);
+    scene.add(new THREE.AmbientLight(0x4060a0, 0.15));
+
+    /* ── visible sun + lens flare ─────────────────────────────────── */
+    // PointLight here is just an anchor for the lensflare sprite — its
+    // intensity is 0 because the actual scene illumination is already
+    // handled by the directional + ambient + env map above. The flare
+    // sits far along the env's sun direction so the reflection cue on
+    // the chrome lines up with the visible source.
+    {
+      const sunDir = new THREE.Vector3(0.6, 0.55, 0.35).normalize();
+      const sunAnchor = new THREE.PointLight(0xfff0d8, 0, 0);
+      sunAnchor.position.copy(sunDir).multiplyScalar(900);
+      scene.add(sunAnchor);
+
+      // textures live in the three.js gh repo (npm strips them)
+      const texLoader = new THREE.TextureLoader().setPath(
+        'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/textures/lensflare/'
+      );
+      const flare0 = texLoader.load('lensflare0.png');
+      const flare3 = texLoader.load('lensflare3.png');
+
+      const lf = new Lensflare();
+      lf.addElement(new LensflareElement(flare0, 680, 0,   new THREE.Color(0xffe2b0)));
+      lf.addElement(new LensflareElement(flare3,  60, 0.6));
+      lf.addElement(new LensflareElement(flare3,  90, 0.7));
+      lf.addElement(new LensflareElement(flare3, 140, 0.9));
+      lf.addElement(new LensflareElement(flare3,  70, 1.0));
+      sunAnchor.add(lf);
+    }
+
+    /* ── audio + Web Audio analyser ──────────────────────────────────
+       The <audio> element plays the user's bg-music.mp3. We pipe it
+       through an AnalyserNode to sample real-time amplitude. The tick
+       loop reads that amplitude and nudges the bloom strength up/down
+       so the scene visibly "breathes" with the track. */
+    const audioEl = document.getElementById('bg-audio');
+    audioEl.volume = 1.0;                         // full strength — gain controls output
+    let audioCtx = null, analyser = null, audioBytes = null;
+    let gainNode = null;
+    let audioReady = false;
+
+    function initAudio() {
+      if (audioReady) return;
+      try {
+        audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
+        const src = audioCtx.createMediaElementSource(audioEl);
+        analyser  = audioCtx.createAnalyser();
+        analyser.fftSize = 128;
+        analyser.smoothingTimeConstant = 0.85;
+        gainNode = audioCtx.createGain();
+        gainNode.gain.value = 0.25;               // initial volume (matches slider default)
+
+        // route: source → analyser (full signal) → gain (volume) → destination
+        // analyser reads BEFORE gain so amplitude is volume-independent.
+        src.connect(analyser);
+        analyser.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        audioBytes = new Uint8Array(analyser.frequencyBinCount);
+        audioReady = true;
+        window.__gain = gainNode;
+      } catch (e) { console.warn('audio init failed', e); }
+    }
+
+    function tryPlay() {
+      initAudio();
+      audioCtx?.resume?.();
+      audioEl.play().catch(() => {/* will retry on user gesture below */});
+    }
+    // best-effort autoplay
+    tryPlay();
+    // any first user interaction will guarantee playback (browser policy)
+    const kickAudio = () => { tryPlay(); window.removeEventListener('pointerdown', kickAudio); window.removeEventListener('keydown', kickAudio); };
+    window.addEventListener('pointerdown', kickAudio, { passive: true });
+    window.addEventListener('keydown',     kickAudio, { passive: true });
+
+    // exposed so tick() can sample
+    window.__audio = {
+      getAmp() {
+        if (!audioReady) return 0;
+        analyser.getByteFrequencyData(audioBytes);
+        // average across the lower 2/3 of the spectrum (bass + mids)
+        const N = Math.floor(audioBytes.length * 0.66);
+        let s = 0;
+        for (let i = 0; i < N; i++) s += audioBytes[i];
+        return s / (N * 255);  // normalized 0..1
+      }
+    };
+
+    /* ── lightning bolts (electric arcs that strike around Rayquaza) ──
+       Pool of reusable Line objects with fractal-subdivided jagged
+       paths. Additive blend + bloom turns thin lines into glowing
+       strikes. Fires randomly with extra weight on audio amplitude
+       peaks. The fragment is geometry-only — visual thickness comes
+       from bloom. */
+    const LIGHTNING_POOL = 5;
+    const BOLT_VERTS     = 128;          // upper bound on subdivided points
+    const lightningSlots = [];
+    for (let i = 0; i < LIGHTNING_POOL; i++) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(BOLT_VERTS * 3), 3));
+      const mat = new THREE.LineBasicMaterial({
+        // brighter near-white core so bloom picks it up hard
+        color: 0xeaf3ff,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      const line = new THREE.Line(geo, mat);
+      line.frustumCulled = false;
+      line.visible = false;
+      scene.add(line);
+      lightningSlots.push({ line, geo, mat, life: 0, maxLife: 0.32 });
+    }
+
+    const _tmpV  = new THREE.Vector3();
+    const _tmpV2 = new THREE.Vector3();
+    function generateBolt(start, end, displacement, subdivisions, outArr) {
+      // recursive midpoint displacement — each iteration halves the
+      // displacement so high-frequency jitter is small
+      let points = [start.clone(), end.clone()];
+      for (let iter = 0; iter < subdivisions; iter++) {
+        const next = [points[0]];
+        for (let i = 0; i < points.length - 1; i++) {
+          const a = points[i], b = points[i+1];
+          const mid = _tmpV.lerpVectors(a, b, 0.5).clone();
+          // perpendicular offset in the camera-facing plane
+          const dir  = _tmpV2.subVectors(b, a).normalize();
+          const perp = new THREE.Vector3(-dir.y, dir.x, dir.z * 0.3).normalize();
+          mid.addScaledVector(perp, (Math.random() - 0.5) * displacement);
+          next.push(mid, b);
+        }
+        points = next;
+        displacement *= 0.55;
+      }
+      const cap = Math.min(points.length, outArr.length / 3);
+      for (let i = 0; i < cap; i++) {
+        outArr[i*3+0] = points[i].x;
+        outArr[i*3+1] = points[i].y;
+        outArr[i*3+2] = points[i].z;
+      }
+      return cap;
+    }
+
+    // shared charge state — set to 1.0 on each strike, decayed in tick
+    const glassCharge = { v: 0 };
+
+    function fireLightning() {
+      const slot = lightningSlots.find(s => s.life <= 0);
+      if (!slot) return;
+      // start: somewhere overhead, end: ON the pk text bounding box
+      const target = pkText ? pkText.position : modelCenter;
+      const ang = Math.random() * Math.PI * 2;
+      const radius = 22 + Math.random() * 22;
+      const start = new THREE.Vector3(
+        target.x + Math.cos(ang) * radius,
+        target.y + 22 + Math.random() * 14,
+        target.z + Math.sin(ang) * radius * 0.5
+      );
+      // narrow scatter around the text — lands ON the letters,
+      // not floating in empty space
+      const end = new THREE.Vector3(
+        target.x + (Math.random() - 0.5) * 10,
+        target.y + (Math.random() - 0.5) * 5,
+        target.z + (Math.random() - 0.5) * 4
+      );
+      const count = generateBolt(start, end, 9, 6, slot.geo.attributes.position.array);
+      slot.geo.setDrawRange(0, count);
+      slot.geo.attributes.position.needsUpdate = true;
+      slot.line.visible = true;
+      slot.life = slot.maxLife = 0.28 + Math.random() * 0.12;
+      slot.mat.opacity = 1.0;
+
+      // charge the glass — soft accumulation. each strike adds 25% of
+      // remaining headroom, so multiple rapid strikes take longer to
+      // saturate the emissive (avoids "too bright too fast" pile-up).
+      glassCharge.v = glassCharge.v + (1.0 - glassCharge.v) * 0.25;
+    }
+
+    // exposed so the tick can drive the lifecycle + trigger
+    window.__lightning = {
+      slots: lightningSlots,
+      fire: fireLightning,
+      lastStrikeT: -1,
+      cooldown: 0.10,
+    };
+
+    /* ── post-processing: bloom + ACES tone mapping ───────────────── */
+    // Use the default composer targets and bump samples on them — this
+    // is more reliable across pixel-ratio combinations than supplying
+    // a custom render target. The defaults are HDR-friendly and resize
+    // correctly with composer.setSize().
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    composer.setSize(window.innerWidth, window.innerHeight);
+    composer.renderTarget1.samples = 4;
+    composer.renderTarget2.samples = 4;
+    composer.renderTarget1.texture.type = THREE.HalfFloatType;
+    composer.renderTarget2.texture.type = THREE.HalfFloatType;
+    composer.addPass(new RenderPass(scene, camera));
+    // (resolution, strength, radius, threshold) — high threshold so
+    // only the bright env-driven highlights bloom; starfield + glass
+    // stay clean.
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      0.55,   // strength
+      0.40,   // radius
+      1.05    // threshold (only HDR-ish brights pass)
+    );
+    composer.addPass(bloomPass);
+    // OutputPass applies ACES Filmic at the END so bloom is computed in
+    // linear and only tone-mapped once.
+    composer.addPass(new OutputPass());
+
+    /* ── camera curve (flies around the model) ────────────────────── */
+    // closed loop around the origin: sweeps wide → close pass → climbs → drops
+    const camCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3( 50,  10,   0),
+      new THREE.Vector3( 36,  22, -32),
+      new THREE.Vector3(  0,  30, -46),
+      new THREE.Vector3(-34,  18, -30),
+      new THREE.Vector3(-44,  -2,   2),
+      new THREE.Vector3(-30, -10,  36),
+      new THREE.Vector3(  4,  -4,  48),
+      new THREE.Vector3( 34,   6,  34)
+    ], /* closed */ true, 'centripetal', 0.5);
+
+    // (debug cube removed — we now know the model renders at its skeleton
+    // center; the camera orbits around that instead of origin.)
+
+    /* ── pk logo (loaded in parallel with model) ──────────────────── */
+    let pkText = null;
+    new FontLoader().load(
+      'https://cdn.jsdelivr.net/npm/three@0.160/examples/fonts/helvetiker_bold.typeface.json',
+      (font) => {
+        const geo = new TextGeometry('pk', {
+          font,
+          size: 8,
+          height: 2.2,
+          curveSegments: 24,
+          bevelEnabled: true,
+          // very small bevel — just enough to soften the sharp corner
+          // and pick up a hairline highlight, not enough to read as a
+          // chunky rounded edge.
+          bevelThickness: 0.06,
+          bevelSize: 0.025,
+          bevelOffset: 0,
+          bevelSegments: 4
+        });
+        geo.computeBoundingBox();
+        geo.center();
+        // refined glass — adds three layers of nuance on top of the base
+        // refraction:
+        //   1) iridescence — thin-film interference creates subtle
+        //      rainbow shifts across the surface as the camera moves
+        //   2) dispersion — light splits into RGB through the bevel
+        //      edges (real glass prism behavior), only available on
+        //      three r156+
+        //   3) bumped thickness + lower roughness for deeper, sharper
+        //      refraction of Rayquaza behind the letters
+        // subtle invisible-glass — maximum transparency, only the
+        // gentlest cues that it's there (light bevel highlight, faint
+        // refraction). Reads as a presence more than a material.
+        const mat = new THREE.MeshPhysicalMaterial({
+          color:               0xffffff,
+          metalness:           0.0,
+          roughness:           0.06,
+          transmission:        1.0,
+          thickness:           1.4,
+          ior:                 1.5,
+          envMapIntensity:     1.0,
+          clearcoat:           0.5,
+          clearcoatRoughness:  0.08,
+          attenuationColor:    new THREE.Color(0xeef4ff),
+          attenuationDistance: 12.0,
+          // dial iridescence down to a whisper
+          iridescence:                  0.25,
+          iridescenceIOR:               1.3,
+          iridescenceThicknessRange:    [120, 420],
+          dispersion: 0.2,
+          transparent: true,
+          side: THREE.DoubleSide
+        });
+        pkText = new THREE.Mesh(geo, mat);
+        if (model) pkText.position.copy(modelCenter);
+        scene.add(pkText);
+      }
+    );
+
+    /* ── load model, capture skeleton ─────────────────────────────── */
+    let model       = null;
+    let bodyChain   = [];   // ordered head → spine → tail, full chain
+    let jaw         = null;
+    let arms        = { L: [], R: [] };
+    let modelCenter = new THREE.Vector3();
+
+    new GLTFLoader().load('rayquaza/rayquaza.glb',
+      (gltf) => {
+        model = gltf.scene;
+
+        // do NOT transform the wrapper group — SkinnedMesh wraps its skin
+        // matrices around the parent's transform at load time, and we end
+        // up with vertices rendering at unknown world positions while
+        // model.position reports a different (cosmetic) value. Both
+        // build agents hit this. Instead: add as-is, then compute the
+        // SkinnedMesh's actual rendered bounding box from its geometry
+        // and bone matrices, and aim the camera at that center.
+        scene.add(model);
+        model.updateMatrixWorld(true);
+
+        // sample bone world positions to discover where the model is
+        // actually rendering
+        const worldBox = new THREE.Box3();
+        const tmp = new THREE.Vector3();
+        model.traverse(o => {
+          if (o.isBone) { o.getWorldPosition(tmp); worldBox.expandByPoint(tmp); }
+        });
+        modelCenter.copy(worldBox.getCenter(new THREE.Vector3()));
+        const worldSize = worldBox.getSize(new THREE.Vector3()).length();
+        log(`model · center (${modelCenter.x.toFixed(1)},${modelCenter.y.toFixed(1)},${modelCenter.z.toFixed(1)}) · size ${worldSize.toFixed(1)}`);
+
+        // place the pk text at the model's actual world center
+        if (pkText) pkText.position.copy(modelCenter);
+
+        // restore the model's native metallic look. The synthetic env map
+        // provides the highlights + rim so chrome reads chrome, not black.
+        // Selective brightness boost on the model (small margin) WITHOUT
+        // changing materials on the pk text (which keeps its own settings).
+        model.traverse(o => {
+          if (o.isMesh && o.material) {
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            mats.forEach(m => {
+              if ('envMapIntensity' in m) m.envMapIntensity = 2.0;   // ~25% lift
+              if ('roughness' in m)       m.roughness = Math.max(m.roughness, 0.25);
+              // tiny self-glow so the body never crushes to pure black
+              // in shadowed orientations — keeps the green/red readable
+              if (m.map && 'emissive' in m) {
+                m.emissive = new THREE.Color(0x141a14);
+                m.emissiveIntensity = 0.35;
+              }
+            });
+          }
+        });
+
+        // build the full body chain head → spine → tail-tip so the wave
+        // travels along the whole serpent, not just the tail. order matters:
+        // a traveling sin(t - k*i) wave needs i increasing monotonically
+        // from one end of the body to the other.
+        const found = { head: null, neck: [], spine: [], tail: [], jaw: null };
+        const arms_L = [], arms_R = [];
+        model.traverse(o => {
+          if (!o.isBone) return;
+          const n = o.name;
+          if (/^Head_/.test(n))        found.head = o;
+          else if (/^Neck(\d+)_/.test(n))  found.neck.push(o);
+          else if (/^Spine(\d+)_/.test(n)) found.spine.push(o);
+          else if (/^Tail(\d+)_/.test(n) && !/_end_/.test(n)) found.tail.push(o);
+          else if (/^Jaw_/.test(n) && !/_end_/.test(n)) found.jaw = o;
+          else if (/^LArm_|^LForeArm_/.test(n)) arms_L.push(o);
+          else if (/^RArm_|^RForeArm_/.test(n)) arms_R.push(o);
+        });
+        const byNum = (re) => (a, b) =>
+          parseInt(a.name.match(re)[1], 10) - parseInt(b.name.match(re)[1], 10);
+        found.neck.sort(byNum(/Neck(\d+)/));
+        found.spine.sort(byNum(/Spine(\d+)/));
+        found.tail.sort(byNum(/Tail(\d+)/));
+
+        // chain index 0 = head end (small wave amplitude), increasing
+        // toward tail tip (largest amplitude).
+        bodyChain = [
+          ...(found.head ? [found.head] : []),
+          ...found.neck.slice().reverse(),     // Neck2 closer to head than Neck1
+          ...found.spine.slice().reverse(),    // Spine2 closer to head than Spine1
+          ...found.tail
+        ];
+        jaw    = found.jaw;
+        arms.L = arms_L;
+        arms.R = arms_R;
+
+        // snapshot rest rotations so animations are additive offsets
+        [...bodyChain, jaw, ...arms.L, ...arms.R].filter(Boolean).forEach(b => {
+          b.userData.rest = { x: b.rotation.x, y: b.rotation.y, z: b.rotation.z };
+        });
+
+        log(`loaded · chain ${bodyChain.length} (head→tail) · arms ${arms.L.length+arms.R.length} · jaw ${jaw?'y':'n'}`);
+      },
+      undefined,
+      (err) => log('load error: ' + (err.message || err))
+    );
+
+    /* ── resize ───────────────────────────────────────────────────── */
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      composer.setSize(window.innerWidth, window.innerHeight);
+      bloomPass.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    /* ── animate ──────────────────────────────────────────────────── */
+    const clock = new THREE.Clock();
+    const tmpLookAt = new THREE.Vector3();
+
+    // (#1) parent posts {__heroAction:'pause'|'resume'} when the hero
+    // section enters/leaves the viewport. Pausing skips the rAF render
+    // entirely and suspends the audio context — drops GPU + audio cost
+    // to zero while the user is reading the rest of the page.
+    let isPaused = false;
+    window.addEventListener('message', (e) => {
+      const action = e.data && e.data.__heroAction;
+      if (action === 'pause') {
+        isPaused = true;
+        if (audioCtx && audioCtx.state === 'running') audioCtx.suspend();
+        if (audioEl && !audioEl.paused) audioEl.pause();
+      } else if (action === 'resume') {
+        isPaused = false;
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+        if (audioEl && audioEl.paused) audioEl.play().catch(() => {});
+      }
+    });
+
+    function tick() {
+      requestAnimationFrame(tick);
+      if (isPaused) return;     // skip render + animation while off-screen
+      const t = clock.getElapsedTime();
+
+      // sample audio amplitude once per frame, share across reactives
+      const amp = window.__audio ? window.__audio.getAmp() : 0;
+
+      // nebula noise time + pulse uniform
+      if (window.__nebulaMat) {
+        window.__nebulaMat.uniforms.uTime.value  = t;
+        window.__nebulaMat.uniforms.uPulse.value = amp;
+      }
+
+      // lightning lifecycle + audio-reactive trigger
+      if (window.__lightning) {
+        const dt = Math.min(0.05, t - (window.__lastT || t));
+        const L = window.__lightning;
+        for (const slot of L.slots) {
+          if (slot.life > 0) {
+            slot.life -= dt;
+            // sharp falloff so bolts vanish fast (lightning IRL stays
+            // visible only a few frames)
+            const k = Math.max(0, slot.life / slot.maxLife);
+            slot.mat.opacity = k * k;
+            if (slot.life <= 0) slot.line.visible = false;
+          }
+        }
+        // trigger: amp peaks above threshold, with cooldown.
+        // music-driven strikes are kept rare so the scene doesn't
+        // pile up into solid white; ambient trickle stays as-is.
+        const ready = (t - L.lastStrikeT) > L.cooldown;
+        const ampTrigger     = ready && amp > 0.30 && Math.random() < 0.55;
+        const ambientTrigger = ready && Math.random() < 0.025;
+        if (ampTrigger || ambientTrigger) {
+          L.fire();
+          L.lastStrikeT = t;
+        }
+
+        // decay the glass charge and modulate OPTICAL properties of
+        // the pk material. Heavy emissive made it read as glowing
+        // plastic; instead we drive the glass-specific knobs so the
+        // material itself feels "energized":
+        //   - iridescence climbs (rainbow shimmer intensifies)
+        //   - dispersion climbs (RGB split at edges goes wild)
+        //   - clearcoat sharpens (mirror-flash on surface)
+        //   - faint inner emissive lifts the body without dominating
+        if (pkText) {
+          glassCharge.v *= 0.94;
+          if (glassCharge.v < 0.002) glassCharge.v = 0;
+          const k = glassCharge.v;
+          const mat = pkText.material;
+          // bases (matching the baseline material config above)
+          const baseIrid       = 0.25,  peakIrid       = 0.95;
+          const baseDisp       = 0.20,  peakDisp       = 0.90;
+          const baseClearcoat  = 0.50,  peakClearcoat  = 1.00;
+          const baseCcRough    = 0.08,  peakCcRough    = 0.02;
+          const baseEnv        = 1.00,  peakEnv        = 2.40;
+          mat.iridescence        = baseIrid       + (peakIrid       - baseIrid)       * k;
+          mat.dispersion         = baseDisp       + (peakDisp       - baseDisp)       * k;
+          mat.clearcoat          = baseClearcoat  + (peakClearcoat  - baseClearcoat)  * k;
+          mat.clearcoatRoughness = baseCcRough    + (peakCcRough    - baseCcRough)    * k;
+          mat.envMapIntensity    = baseEnv        + (peakEnv        - baseEnv)        * k;
+          // very subtle internal glow — just enough to suggest the
+          // glass is conducting, not enough to read as a light bulb
+          mat.emissive.setRGB(0.10 * k, 0.18 * k, 0.28 * k);
+          mat.emissiveIntensity = 0.25 * k;
+        }
+      }
+      window.__lastT = t;
+
+      if (model) {
+        /* full-body traveling wave + layered motion. wave travels
+           head→tail (-k*i), amplitude grows toward the tip. Two
+           harmonics overlaid for organic feel. Lateral (Y) is the main
+           snake motion; vertical (X) adds 3D life; whole-body drift
+           gives it scale. */
+        const N = bodyChain.length;
+        const omega    = 1.7;
+        const k        = 0.62;
+        // amplitude breathes between ~30% and 100% so undulation has dynamics
+        const breathe  = 0.65 + Math.sin(t * 0.31) * 0.35;
+        // bigger floor at the head end so head/neck don't read stiff
+        // next to the punchy tail
+        const yBase    = 0.10;
+        const yTip     = 0.42;
+        const xBase    = 0.05;
+        const xTip     = 0.18;
+
+        for (let i = 0; i < N; i++) {
+          const b = bodyChain[i];
+          if (!b || !b.userData.rest) continue;
+          const u   = i / Math.max(1, N - 1);
+          const amp = (yBase + (yTip - yBase) * u) * breathe;
+          const axp = (xBase + (xTip - xBase) * u) * breathe;
+          // primary travelling wave + second harmonic at half speed for chaos
+          const wave =
+            Math.sin(omega * t - k * i)               * 0.85 +
+            Math.sin(omega * 0.45 * t - k * 0.55 * i + 1.2) * 0.35 +
+            Math.sin(omega * 1.9 * t - k * 1.3 * i + 0.7)   * 0.12;  // small fast ripple
+          b.rotation.y = b.userData.rest.y + wave * amp;
+          b.rotation.x = b.userData.rest.x + Math.sin(omega * t - k * i + Math.PI/2) * axp * 0.7;
+          // z roll along the chain too — subtle, makes the tail flick read 3D
+          b.rotation.z = b.userData.rest.z + Math.sin(omega * 0.6 * t - k * 0.7 * i) * amp * 0.35;
+        }
+
+        // independent head + neck animation — surveys side to side and
+        // tilts, applied across the first three bones with falloff so
+        // the head leads, neck2 follows, neck1 trails. fixes the
+        // stiff-neck look against the wagging tail.
+        for (let i = 0; i < 3; i++) {
+          const b = bodyChain[i];
+          if (!b || !b.userData.rest) continue;
+          const falloff = i === 0 ? 1.0 : (i === 1 ? 0.7 : 0.45);
+          b.rotation.y += (Math.sin(t * 0.42 + i * 0.4) * 0.20 +
+                           Math.sin(t * 0.18 + 1.1 + i * 0.3) * 0.10) * falloff;
+          b.rotation.x +=  Math.sin(t * 0.31 + 1 + i * 0.25) * 0.09 * falloff;
+          b.rotation.z +=  Math.sin(t * 0.24 + 0.5 + i * 0.2) * 0.06 * falloff;
+        }
+
+        // independent SPINE sway — tightened. Only the two true spine
+        // bones (Spine2, Spine1) get a small extra lateral motion so
+        // the core has presence without fighting the body wave already
+        // running through. No X-tilt (was reading as uncertain), small
+        // Z roll only.
+        for (let i = 3; i <= 4 && i < bodyChain.length; i++) {
+          const b = bodyChain[i];
+          if (!b || !b.userData.rest) continue;
+          b.rotation.y += Math.sin(t * 0.28 + i * 0.5)       * 0.05;
+          b.rotation.z += Math.sin(t * 0.22 + 0.7 + i * 0.4) * 0.04;
+        }
+
+        // jaw — breathing + sharper snaps
+        if (jaw) {
+          const breath = Math.sin(t * 1.1) * 0.06 + 0.06;
+          const snap   = Math.max(0, Math.sin(t * 0.55 - 1)) ** 10 * 0.30;
+          jaw.rotation.x = jaw.userData.rest.x + breath + snap;
+        }
+
+        // arms — bigger wing-like sway, opposite phase + a Y rotation
+        // so they don't just flap straight up/down
+        const armSway = Math.sin(t * 1.05) * 0.16;
+        const armYaw  = Math.sin(t * 0.7)  * 0.10;
+        arms.L.forEach((b, i) => {
+          b.rotation.z = b.userData.rest.z + armSway * (1 + i*0.3);
+          b.rotation.y = b.userData.rest.y + armYaw  * (1 + i*0.2);
+        });
+        arms.R.forEach((b, i) => {
+          b.rotation.z = b.userData.rest.z - armSway * (1 + i*0.3);
+          b.rotation.y = b.userData.rest.y - armYaw  * (1 + i*0.2);
+        });
+
+        // whole-body motion — kept tighter so the body stays anchored
+        // between the letters and doesn't drift far from the "in
+        // between p and k" silhouette. rotations carry most of the
+        // life now; translations are gentle accents.
+        const MODEL_X_OFFSET = -1;
+        model.position.y =                 Math.sin(t * 0.32)        * 0.45;
+        model.position.x = MODEL_X_OFFSET + Math.sin(t * 0.21 + 0.5) * 0.55;
+        model.position.z =                  Math.sin(t * 0.18 + 1.2) * 0.45;
+        model.rotation.z = Math.sin(t * 0.24) * 0.10;
+        model.rotation.y = Math.sin(t * 0.17) * 0.07;
+        model.rotation.x = Math.sin(t * 0.20 + 0.6) * 0.05;
+      }
+
+      // camera locked — frame the model + pk text dead center. we'll
+      // add motion back later once the composition is right.
+      camera.position.set(modelCenter.x, modelCenter.y + 4, modelCenter.z + 55);
+      camera.lookAt(modelCenter);
+
+      // audio-reactive bloom — subtle pulse around base strength
+      {
+        const target = 0.55 + amp * 0.45;
+        bloomPass.strength += (target - bloomPass.strength) * 0.08;
+      }
+
+      // audio-reactive camera FOV breath — tiny zoom-in on bass hits
+      {
+        const targetFov = 38 - amp * 0.6;
+        camera.fov += (targetFov - camera.fov) * 0.10;
+        camera.updateProjectionMatrix();
+      }
+
+      composer.render();
+    }
+    tick();
+  </script>
+</body>
+</html>

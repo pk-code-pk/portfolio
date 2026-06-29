@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>liquid chrome · test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #aab; overflow: hidden;
+                 font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+    #stage { position: fixed; inset: 0; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .hud {
+      position: fixed; top: 12px; left: 14px;
+      font-size: 11px; letter-spacing: 0.04em; line-height: 1.6;
+      color: rgba(255,255,255,0.7); pointer-events: none;
+      background: rgba(0,0,0,0.55); padding: 8px 12px; border-radius: 4px;
+    }
+    .panel {
+      position: fixed; top: 12px; right: 14px; display: flex; flex-direction: column;
+      gap: 6px; font-size: 11px;
+      background: rgba(0,0,0,0.55); padding: 10px 12px; border-radius: 4px;
+      color: rgba(255,255,255,0.8); min-width: 200px;
+    }
+    .panel .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+    .panel input[type=range] { flex: 1; }
+    .panel .swatches { display: flex; gap: 6px; margin-top: 6px; }
+    .panel .sw { width: 22px; height: 22px; border-radius: 3px; cursor: pointer; border: 1px solid #2a2d3a; }
+    .panel .sw.active { outline: 2px solid #fff; }
+  </style>
+</head>
+<body>
+  <div id="stage"></div>
+
+  <div class="hud">
+    liquid chrome · ogl shader<br>
+    move cursor for ripples
+  </div>
+
+  <div class="panel">
+    <div class="row"><span>amplitude</span><span id="v-amp">0.50</span></div>
+    <input id="amp" type="range" min="0" max="1" step="0.01" value="0.5">
+
+    <div class="row"><span>freq x</span><span id="v-fx">3.0</span></div>
+    <input id="fx" type="range" min="0.5" max="8" step="0.1" value="3">
+
+    <div class="row"><span>freq y</span><span id="v-fy">2.0</span></div>
+    <input id="fy" type="range" min="0.5" max="8" step="0.1" value="2">
+
+    <div class="row"><span>speed</span><span id="v-sp">0.20</span></div>
+    <input id="sp" type="range" min="0" max="1" step="0.01" value="0.2">
+
+    <div class="row"><span>base color</span></div>
+    <div class="swatches">
+      <div class="sw active" data-c="0.10,0.10,0.10" style="background:#1a1a1a"></div>
+      <div class="sw"       data-c="0.05,0.08,0.12" style="background:#0d141f"></div>
+      <div class="sw"       data-c="0.10,0.15,0.15" style="background:#1a2626"></div>
+      <div class="sw"       data-c="0.08,0.04,0.12" style="background:#140a1f"></div>
+      <div class="sw"       data-c="0.16,0.12,0.06" style="background:#291f0f"></div>
+      <div class="sw"       data-c="0.04,0.16,0.10" style="background:#0a291a"></div>
+    </div>
+  </div>
+
+  <!-- LiquidChrome shader ported from React Bits (MIT, https://reactbits.dev) -->
+  <script type="module">
+    import { Renderer, Program, Mesh, Triangle } from 'https://esm.sh/ogl@1.0.11';
+
+    const stage = document.getElementById('stage');
+
+    const vertex = /* glsl */`
+      attribute vec2 position;
+      attribute vec2 uv;
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = vec4(position, 0.0, 1.0); }
+    `;
+
+    const fragment = /* glsl */`
+      precision highp float;
+      uniform float uTime;
+      uniform vec3  uResolution;
+      uniform vec3  uBaseColor;
+      uniform float uAmplitude;
+      uniform float uFrequencyX;
+      uniform float uFrequencyY;
+      uniform vec2  uMouse;
+      varying vec2 vUv;
+
+      vec4 renderImage(vec2 uvCoord) {
+        vec2 fragCoord = uvCoord * uResolution.xy;
+        vec2 uv = (2.0 * fragCoord - uResolution.xy) / min(uResolution.x, uResolution.y);
+
+        for (float i = 1.0; i < 10.0; i++) {
+          uv.x += uAmplitude / i * cos(i * uFrequencyX * uv.y + uTime + uMouse.x * 3.14159);
+          uv.y += uAmplitude / i * cos(i * uFrequencyY * uv.x + uTime + uMouse.y * 3.14159);
+        }
+
+        vec2 diff = (uvCoord - uMouse);
+        float dist = length(diff);
+        float falloff = exp(-dist * 20.0);
+        float ripple = sin(10.0 * dist - uTime * 2.0) * 0.03;
+        uv += (diff / (dist + 0.0001)) * ripple * falloff;
+
+        vec3 color = uBaseColor / abs(sin(uTime - uv.y - uv.x));
+        return vec4(color, 1.0);
+      }
+
+      void main() {
+        vec4 col = vec4(0.0);
+        int samples = 0;
+        for (int i = -1; i <= 1; i++) {
+          for (int j = -1; j <= 1; j++) {
+            vec2 offset = vec2(float(i), float(j)) / min(uResolution.x, uResolution.y);
+            col += renderImage(vUv + offset);
+            samples++;
+          }
+        }
+        gl_FragColor = col / float(samples);
+      }
+    `;
+
+    const renderer = new Renderer({ dpr: Math.min(window.devicePixelRatio || 1, 2) });
+    const gl = renderer.gl;
+    stage.appendChild(gl.canvas);
+
+    const geometry = new Triangle(gl);
+
+    const state = {
+      base:  new Float32Array([0.10, 0.10, 0.10]),
+      mouse: new Float32Array([0.5, 0.5]),
+      amp:   0.5,
+      fx:    3.0,
+      fy:    2.0,
+      speed: 0.2
+    };
+
+    const program = new Program(gl, {
+      vertex, fragment,
+      uniforms: {
+        uTime:        { value: 0 },
+        uResolution:  { value: new Float32Array([1, 1, 1]) },
+        uBaseColor:   { value: state.base },
+        uAmplitude:   { value: state.amp },
+        uFrequencyX:  { value: state.fx },
+        uFrequencyY:  { value: state.fy },
+        uMouse:       { value: state.mouse }
+      }
+    });
+    const mesh = new Mesh(gl, { geometry, program });
+
+    function resize() {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      const res = program.uniforms.uResolution.value;
+      res[0] = gl.canvas.width;
+      res[1] = gl.canvas.height;
+      res[2] = gl.canvas.width / gl.canvas.height;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    window.addEventListener('pointermove', e => {
+      state.mouse[0] = e.clientX / window.innerWidth;
+      state.mouse[1] = 1.0 - e.clientY / window.innerHeight;
+    });
+
+    // controls
+    const setLabel = (id, val) => document.getElementById('v-' + id).textContent = (+val).toFixed(2);
+    document.getElementById('amp').oninput = (e) => { state.amp   = +e.target.value; program.uniforms.uAmplitude.value  = state.amp;   setLabel('amp', state.amp); };
+    document.getElementById('fx').oninput  = (e) => { state.fx    = +e.target.value; program.uniforms.uFrequencyX.value = state.fx;    setLabel('fx',  state.fx);  };
+    document.getElementById('fy').oninput  = (e) => { state.fy    = +e.target.value; program.uniforms.uFrequencyY.value = state.fy;    setLabel('fy',  state.fy);  };
+    document.getElementById('sp').oninput  = (e) => { state.speed = +e.target.value;                                                     setLabel('sp',  state.speed); };
+
+    document.querySelectorAll('.sw').forEach(sw => {
+      sw.onclick = () => {
+        document.querySelectorAll('.sw').forEach(s => s.classList.remove('active'));
+        sw.classList.add('active');
+        const [r, g, b] = sw.dataset.c.split(',').map(parseFloat);
+        state.base[0] = r; state.base[1] = g; state.base[2] = b;
+      };
+    });
+
+    const t0 = performance.now();
+    function tick(t) {
+      requestAnimationFrame(tick);
+      program.uniforms.uTime.value = (t - t0) * 0.001 * state.speed;
+      renderer.render({ scene: mesh });
+    }
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>

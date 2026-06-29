@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>rayquaza · flying</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #87b8e6;
+                 overflow: hidden; font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+    #c { display: block; width: 100vw; height: 100vh; }
+    #err { position: fixed; inset: auto 14px 14px 14px; color: #fff;
+           background: rgba(120,0,0,0.85); padding: 10px 14px; border-radius: 6px;
+           font-size: 12px; display: none; white-space: pre-wrap; max-height: 40vh; overflow: auto;
+           pointer-events: none; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="err"></div>
+
+  <script>
+    const errEl = document.getElementById('err');
+    function showErr(msg) {
+      errEl.style.display = 'block';
+      errEl.textContent = (errEl.textContent ? errEl.textContent + '\n\n' : '') + msg;
+    }
+    window.addEventListener('error', e => showErr('Error: ' + e.message + (e.filename ? '\n  at ' + e.filename + ':' + e.lineno : '')));
+    window.addEventListener('unhandledrejection', e => showErr('Promise rejection: ' + (e.reason?.message || e.reason)));
+  </script>
+
+  <script type="module">
+    const canvas = document.getElementById('c');
+
+    const THREE          = await import('https://esm.sh/three@0.160');
+    const { GLTFLoader } = await import('https://esm.sh/three@0.160/examples/jsm/loaders/GLTFLoader.js');
+    const { Sky }        = await import('https://esm.sh/three@0.160/examples/jsm/objects/Sky.js');
+
+    // ────────────────────────────────────────────────────────────────
+    // renderer
+    // ────────────────────────────────────────────────────────────────
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // ACES tone mapping for the model lighting. The visible sky uses
+    // its own pre-tuned shader (toneMapped:false) so its saturation
+    // is unaffected.
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.7;
+
+    const scene = new THREE.Scene();
+
+    // ────────────────────────────────────────────────────────────────
+    // sky — we use the Preetham Sky shader for IBL (lighting), but
+    // overlay a hand-tuned gradient as the visible background because
+    // Preetham, after tone mapping, reads pale and gray. The gradient
+    // sky gives us full control over saturation.
+    // ────────────────────────────────────────────────────────────────
+    const sky = new Sky();
+    sky.scale.setScalar(45000);
+    // don't add the Preetham sky to the visible scene — only use it
+    // for environment capture below
+
+    const sun = new THREE.Vector3();
+    const SUN_ELEVATION = 38;
+    const SUN_AZIMUTH   = 220;
+
+    const uniforms = sky.material.uniforms;
+    uniforms['turbidity'].value        = 2.5;
+    uniforms['rayleigh'].value         = 2.5;
+    uniforms['mieCoefficient'].value   = 0.004;
+    uniforms['mieDirectionalG'].value  = 0.8;
+
+    // visible-sky gradient: a giant inverted sphere with a custom
+    // shader. Bright blue at zenith, soft cyan-white near horizon.
+    {
+      const sg = new THREE.SphereGeometry(2000, 32, 16);
+      // ShaderMaterial outputs straight to the framebuffer; with
+      // outputColorSpace = sRGB, three.js does NOT auto-encode
+      // shader-material output (unlike standard materials). So pass
+      // raw sRGB values and they appear as designed.
+      const cTop   = new THREE.Color('#3d8fd8');
+      const cMid   = new THREE.Color('#8fc7ef');
+      const cHoriz = new THREE.Color('#dfeef9');
+      const cSun   = new THREE.Color('#fff0c8');
+      const sm = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        toneMapped: false,
+        uniforms: {
+          uTop:      { value: cTop },
+          uMid:      { value: cMid },
+          uHoriz:    { value: cHoriz },
+          uSunDir:   { value: new THREE.Vector3(0, 1, 0) },
+          uSunColor: { value: cSun },
+        },
+        vertexShader: `
+          varying vec3 vWorldDir;
+          void main() {
+            vec4 worldPos = modelMatrix * vec4(position, 1.0);
+            vWorldDir = normalize(worldPos.xyz);
+            gl_Position = projectionMatrix * viewMatrix * worldPos;
+          }
+        `,
+        fragmentShader: `
+          precision highp float;
+          varying vec3 vWorldDir;
+          uniform vec3 uTop;
+          uniform vec3 uMid;
+          uniform vec3 uHoriz;
+          uniform vec3 uSunDir;
+          uniform vec3 uSunColor;
+          void main() {
+            float h = clamp(vWorldDir.y, -0.2, 1.0);
+            // 3-stop gradient: horizon → mid → zenith
+            vec3 sky;
+            if (h < 0.18) {
+              sky = mix(uHoriz, uMid, smoothstep(-0.05, 0.18, h));
+            } else {
+              sky = mix(uMid, uTop, smoothstep(0.18, 0.85, h));
+            }
+            // gentle sun glow — soft warm hint around sun direction
+            float sunDot = max(dot(vWorldDir, uSunDir), 0.0);
+            float glow = pow(sunDot, 8.0) * 0.08;
+            sky = mix(sky, uSunColor, glow);
+            // soft tone: clamp to keep it readable under any exposure
+            gl_FragColor = vec4(sky, 1.0);
+          }
+        `,
+      });
+      const skyDome = new THREE.Mesh(sg, sm);
+      skyDome.renderOrder = -1000;
+      scene.add(skyDome);
+      // expose for sun-direction sync later
+      window.__skyMat = sm;
+    }
+
+    const phi   = THREE.MathUtils.degToRad(90 - SUN_ELEVATION);
+    const theta = THREE.MathUtils.degToRad(SUN_AZIMUTH);
+    sun.setFromSphericalCoords(1, phi, theta);
+    uniforms['sunPosition'].value.copy(sun);
+    if (window.__skyMat) window.__skyMat.uniforms.uSunDir.value.copy(sun);
+
+    // ────────────────────────────────────────────────────────────────
+    // IBL from the sky — render the sky into a tiny temp scene and
+    // PMREM-generate. This is what actually lights the metallics:
+    // a bright HDR cubemap of the daylight sky.
+    // ────────────────────────────────────────────────────────────────
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    {
+      const skyScene = new THREE.Scene();
+      // Use a small-scale clone of the Sky so it fits within PMREM's
+      // default 0.1→100 render frustum. The sky shader samples by
+      // world direction, so scale doesn't change the look — only what
+      // PMREM can see inside its short-range view.
+      const skyClone = new Sky();
+      skyClone.scale.setScalar(50);
+      const u = skyClone.material.uniforms;
+      u['turbidity'].value       = uniforms['turbidity'].value;
+      u['rayleigh'].value        = uniforms['rayleigh'].value;
+      u['mieCoefficient'].value  = uniforms['mieCoefficient'].value;
+      u['mieDirectionalG'].value = uniforms['mieDirectionalG'].value;
+      u['sunPosition'].value.copy(uniforms['sunPosition'].value);
+      skyScene.add(skyClone);
+      const envRT = pmrem.fromScene(skyScene, 0.04, 0.1, 1000);
+      scene.environment = envRT.texture;
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // direct lights — IBL does the heavy lifting; sun light just adds
+    // a directional highlight & shadowing cue. Keep intensities modest
+    // because the Sky's HDR values + low exposure already give the
+    // model plenty of light energy.
+    // ────────────────────────────────────────────────────────────────
+    const sunLight = new THREE.DirectionalLight(0xfff5e0, 1.6);
+    sunLight.position.copy(sun).multiplyScalar(200);
+    scene.add(sunLight);
+
+    const skyFill = new THREE.HemisphereLight(0xbfd9ff, 0x6a7a8a, 0.35);
+    scene.add(skyFill);
+
+    // ────────────────────────────────────────────────────────────────
+    // clouds — soft sprite billboards drifting slowly
+    // ────────────────────────────────────────────────────────────────
+    const cloudGroup = new THREE.Group();
+    scene.add(cloudGroup);
+
+
+    function makeCloudTexture(seed) {
+      const s = 256;
+      const cnv = document.createElement('canvas');
+      cnv.width = cnv.height = s;
+      const ctx = cnv.getContext('2d');
+      // multiple soft radial blobs to make a fluffy cluster
+      const blobs = 7;
+      for (let i = 0; i < blobs; i++) {
+        const cx = s/2 + (Math.random() - 0.5) * s * 0.55;
+        const cy = s/2 + (Math.random() - 0.5) * s * 0.30;
+        const r  = s * (0.22 + Math.random() * 0.22);
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        g.addColorStop(0,   'rgba(255,255,255,0.95)');
+        g.addColorStop(0.5, 'rgba(255,255,255,0.45)');
+        g.addColorStop(1,   'rgba(255,255,255,0.0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, s, s);
+      }
+      const tex = new THREE.CanvasTexture(cnv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    // Use a few distinct textures so clouds aren't visually identical.
+    const cloudTextures = [makeCloudTexture(), makeCloudTexture(), makeCloudTexture(), makeCloudTexture()];
+
+    const cloudCount = 18;
+    for (let i = 0; i < cloudCount; i++) {
+      const mat = new THREE.SpriteMaterial({
+        map: cloudTextures[i % cloudTextures.length],
+        transparent: true,
+        opacity: 1.0,
+        depthWrite: false,
+        depthTest: true,
+        toneMapped: false,
+      });
+      const s = new THREE.Sprite(mat);
+      // Distant clouds, spread around the horizon. Sit them mostly
+      // below or near the model's altitude so they read as
+      // mid-distance scenery, not foreground objects.
+      const r = 800 + Math.random() * 1200;
+      const a = Math.random() * Math.PI * 2;
+      const h = 30 + Math.random() * 120;
+      s.position.set(Math.cos(a) * r, h, Math.sin(a) * r);
+      const sc = 280 + Math.random() * 400;
+      s.scale.set(sc, sc * 0.5, 1);
+      s.material.opacity = 0.55 + Math.random() * 0.3;
+      cloudGroup.add(s);
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // camera — fixed, low position looking up. The flight curve sits
+    // entirely "above" the camera so the horizon is below the frame
+    // and the model travels across pure sky.
+    // ────────────────────────────────────────────────────────────────
+    const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 50000);
+    camera.position.set(0, 5, 70);
+    camera.lookAt(0, 28, 0);
+
+    // ────────────────────────────────────────────────────────────────
+    // flight curve — tight banking figure that stays in the camera's
+    // central frame. Designed so the model is on-screen for ~all of
+    // the lap, with z ranging close→mid distance (no far-away dot).
+    // Camera is at (0,8,95) looking at (0,28,0).
+    // ────────────────────────────────────────────────────────────────
+    // Mostly horizontal loop with gentle altitude variation. All points
+    // sit within the camera's vertical view zone (y ~ 18-38).
+    const pts = [
+      new THREE.Vector3(-24,  20,  22),   // entry, left & close
+      new THREE.Vector3(-12,  18,  30),   // foreground low swoop
+      new THREE.Vector3(   8, 22,  28),   // closest pass to camera
+      new THREE.Vector3(  22, 26,  14),   // climbing right
+      new THREE.Vector3(  24, 30,   0),   // banking right
+      new THREE.Vector3(   8, 34,  -8),   // arcing back-up
+      new THREE.Vector3( -12, 32,  -4),   // arcing left
+      new THREE.Vector3( -25, 26,  10),   // returning
+    ];
+    const curve = new THREE.CatmullRomCurve3(pts, true, 'centripetal', 0.5);
+
+    // ────────────────────────────────────────────────────────────────
+    // model load
+    // ────────────────────────────────────────────────────────────────
+    let model = null;
+    let modelInner = null;     // inner: holds the GLB, with its own facing offset
+    let modelRoot = null;      // outer: driven by curve (position + orientation)
+    let modelReady = false;
+    const LAP_SECONDS = 15;
+
+    // The GLB's local forward axis isn't necessarily three.js's -Z.
+    // We hold the model in an inner group rotated to match three.js's
+    // convention (forward = -Z, up = +Y). Rayquaza's GLB faces +Z in
+    // local space, so we rotate Y by PI so its head leads the wrapper's
+    // -Z forward direction.
+    const MODEL_YAW = Math.PI;
+
+    new GLTFLoader().load('rayquaza/rayquaza.glb',
+      (gltf) => {
+        model = gltf.scene;
+
+        const box  = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3()).length();
+        const center = box.getCenter(new THREE.Vector3());
+        const targetSize = 30;
+        const scale = targetSize / size;
+        // Apply scale ONLY to the model (no position shift). The
+        // recenter is done by an outer wrapper so that wrapper
+        // rotations always pivot at the visual centroid in world
+        // space (instead of being entangled with skinning matrices).
+        model.scale.setScalar(scale);
+
+        // Hierarchy:
+        //   modelRoot      (driven by curve: position + tangent rot)
+        //     └── modelInner  (wobble + facing correction)
+        //           └── recenter (offset so centroid sits at origin)
+        //                 └── model
+        // The recenter pivot makes wrapper rotations pivot at the
+        // model's visible centroid in world space.
+        const recenter = new THREE.Group();
+        recenter.position.copy(center).multiplyScalar(-scale);
+        recenter.add(model);
+
+        modelInner = new THREE.Group();
+        modelInner.add(recenter);
+        modelInner.rotation.y = MODEL_YAW;
+
+        modelRoot = new THREE.Group();
+        modelRoot.add(modelInner);
+        scene.add(modelRoot);
+
+        // Disable frustum culling on EVERY descendant. Also force
+        // huge bounding spheres on each geometry so any internal
+        // cull check uses a generous radius. The Pokémon GLB is a
+        // SkinnedMesh whose Box3.setFromObject results sometimes
+        // don't match the rendered shape, leading to false culls.
+        modelRoot.traverse(o => {
+          o.frustumCulled = false;
+          if (o.isMesh && o.geometry) {
+            o.geometry.computeBoundingSphere();
+            if (o.geometry.boundingSphere) o.geometry.boundingSphere.radius = 1e4;
+          }
+        });
+
+        // PBR tweaks: GLB materials have metalness=1, low roughness,
+        // which (without a bright HDR environment) read flat or pitch
+        // black. Soften metalness, bump roughness, and crank env
+        // intensity so the diffuse texture colors come through.
+        model.traverse(o => {
+          if (o.isMesh && o.material) {
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            mats.forEach(m => {
+              if (m.isMeshStandardMaterial) {
+                m.envMapIntensity = 1.4;
+                m.metalness = Math.min(m.metalness ?? 0, 0.15);
+                m.roughness = THREE.MathUtils.clamp(m.roughness ?? 0.5, 0.5, 0.8);
+                if (m.transmission !== undefined) m.transmission = 0;
+                m.transparent = false;
+                m.opacity = 1;
+                m.alphaTest = 0;
+                // render both sides — orientation-flip via lookAt + yaw
+                // can make face normals point "wrong way" at certain
+                // curve angles, causing the model to disappear due to
+                // backface culling.
+                m.side = THREE.DoubleSide;
+                m.needsUpdate = true;
+              }
+            });
+          }
+        });
+
+        modelReady = true;
+      },
+      undefined,
+      (err) => { console.error('GLTFLoader error', err); showErr('GLTFLoader error: ' + (err.message || err)); }
+    );
+
+    // ────────────────────────────────────────────────────────────────
+    // animation loop
+    // ────────────────────────────────────────────────────────────────
+    const clock = new THREE.Clock();
+
+    const _pos = new THREE.Vector3();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = clock.getDelta();
+      const t  = (clock.elapsedTime % LAP_SECONDS) / LAP_SECONDS;
+
+      // gentle cloud drift
+      cloudGroup.rotation.y += dt * 0.006;
+
+      if (modelReady && modelRoot) {
+        curve.getPointAt(t, _pos);
+        modelRoot.position.copy(_pos);
+
+        // Subtle snake-like wobble — small enough that the skinned
+        // mesh stays close to its rest-pose position. (Larger rotations
+        // cause this particular GLB's skeleton to drift the rendered
+        // mesh far off-screen due to bone-position interactions.)
+        modelInner.rotation.y = MODEL_YAW + Math.sin(clock.elapsedTime * 2.4) * 0.08;
+        modelInner.position.y = Math.sin(clock.elapsedTime * 0.9) * 0.5;
+      }
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
