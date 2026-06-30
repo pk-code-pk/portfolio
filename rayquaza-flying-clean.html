@@ -347,7 +347,9 @@
     // load (bloom + nebula + transmission are all per-pixel heavy), the
     // single biggest win against mobile scroll jank.
     const TOUCH_DEVICE = window.matchMedia('(hover: none), (pointer: coarse)').matches;
-    const DPR_CAP = TOUCH_DEVICE ? 1 : 2;
+    const DPR_CAP = 2;   // restored: mobile was capped at 1 during the underwater
+                         // rework which halved hero resolution on phones (blurry).
+                         // 2 matches the original sharp version on all devices.
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP));
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -1236,9 +1238,10 @@
     const composer = new EffectComposer(renderer);
     composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP));
     composer.setSize(window.innerWidth, window.innerHeight);
-    // MSAA: 4x on desktop, 0 on touch (mobile GPUs choke on multisampled
-    // HDR targets + bloom; DPR cap already keeps edges acceptable).
-    const MSAA = TOUCH_DEVICE ? 0 : 4;
+    // MSAA: 4x desktop, 2x touch. (Full DPR=2 now does most of the AA work
+    // on mobile; a light 2x cleans remaining edges without the heavy 4x-on-
+    // HDR cost that chokes weaker mobile GPUs.)
+    const MSAA = TOUCH_DEVICE ? 2 : 4;
     composer.renderTarget1.samples = MSAA;
     composer.renderTarget2.samples = MSAA;
     composer.renderTarget1.texture.type = THREE.HalfFloatType;
@@ -1771,9 +1774,24 @@
           renderer.compile(scene, camera);
           composer.render();
         } catch (e) {}
+
+        // HERO READY: model loaded + shaders compiled + first frame rendered.
+        // Tell the parent so its preloader can dismiss only once the hero is
+        // actually on screen (was dismissing on a fixed timer, leaving a blank
+        // hero loading on slow phones).
+        try {
+          window.__heroReady = true;
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ __heroReady: true }, '*');
+          }
+        } catch (e) {}
       },
       undefined,
-      (err) => log('load error: ' + (err.message || err))
+      (err) => {
+        log('load error: ' + (err.message || err));
+        // even on failure, don't trap the parent's preloader forever
+        try { window.parent && window.parent.postMessage({ __heroReady: true }, '*'); } catch (e2) {}
+      }
     );
 
     /* ── greninja: lazy load + mixer setup ─────────────────────────────
