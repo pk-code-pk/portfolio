@@ -1990,13 +1990,33 @@
   function startSite() {
     if (started) return;
     started = true;
-    gsap.to(preloader, {
-      opacity: 0,
-      duration: .8,
-      delay: .3,
-      ease: 'power3.inOut',
-      onComplete: () => { preloader.style.display = 'none'; revealHero(); }
-    });
+    // hard guarantee the preloader is gone shortly after we start, even if
+    // the GSAP tween or revealHero() throws (a thrown reveal must NEVER leave
+    // the z-900 preloader covering the hero — that's the "loading but hero
+    // never shows" bug).
+    const forceClear = setTimeout(() => {
+      preloader.style.opacity = '0';
+      preloader.style.display = 'none';
+      preloader.style.pointerEvents = 'none';
+    }, 1400);
+    try {
+      gsap.to(preloader, {
+        opacity: 0,
+        duration: .8,
+        delay: .3,
+        ease: 'power3.inOut',
+        onComplete: () => {
+          clearTimeout(forceClear);
+          preloader.style.display = 'none';
+          preloader.style.pointerEvents = 'none';
+          try { revealHero(); } catch (e) {}
+        }
+      });
+    } catch (e) {
+      // GSAP missing/failed → fall back to the forceClear above + reveal now
+      preloader.style.display = 'none';
+      try { revealHero(); } catch (e2) {}
+    }
   }
 
   // The preloader now dismisses only once BOTH the intro animation has
@@ -2014,17 +2034,19 @@
   });
 
   setTimeout(() => {
-    jpFill.classList.add('filled');                    // sweep left→right (var(--t-cinematic) = 1200ms)
+    try { jpFill && jpFill.classList.add('filled'); } catch (e) {}  // sweep left→right
     setTimeout(() => {
       cancelAnimationFrame(staticRAF);                 // stop static
-      jpFill.classList.add('clean');                   // resolve to clean text
+      try { jpFill && jpFill.classList.add('clean'); } catch (e) {} // resolve to clean text
       setTimeout(() => { introDone = true; maybeStart(); }, 500);  // intro done → wait for hero
     }, 1200);
   }, 400);
 
   // safety net: never hold the preloader longer than this even if the hero
-  // never reports ready (so the page is always usable).
-  setTimeout(() => { introDone = true; heroReady = true; startSite(); }, 12000);
+  // never reports ready (WebGL failure / slow phone). 8s keeps a slow phone
+  // from staring at "loading" indefinitely while still giving the hero a fair
+  // chance to signal first.
+  setTimeout(() => { introDone = true; heroReady = true; startSite(); }, 8000);
 
   /* ─── Splitting.js ─── */
   // Rewrite the hero title for narrow viewports BEFORE Splitting runs.
@@ -2047,23 +2069,21 @@
      emphatic scale (0.8s) and scroll-hint a beat longer to settle. All
      three share the same power3.out curve so they land together. */
   function revealHero() {
-    const chars = document.querySelectorAll('.hero-title .char');
-    gsap.to(chars, {
-      opacity: 1,
-      duration: 1.1,
-      ease: 'power3.out',
-      stagger: 0.03,
-    });
-
-    gsap.to('.hero-tagline', {
-      opacity: 1, y: 0,
-      duration: .8, delay: .4, ease: 'power3.out',
-      from: { opacity: 0, y: 20 }
-    });
-
-    gsap.to('#scroll-hint', {
-      opacity: 1, duration: 1, delay: .8, ease: 'power3.out'
-    });
+    // guarded: animate if targets + GSAP exist, but ALWAYS leave the hero
+    // text visible (fallback sets opacity directly) so a missing target /
+    // GSAP hiccup can never leave the hero blank.
+    const chars   = document.querySelectorAll('.hero-title .char');
+    const tagline  = document.querySelector('.hero-tagline');
+    const scroll   = document.getElementById('scroll-hint');
+    try {
+      if (chars.length) gsap.to(chars, { opacity: 1, duration: 1.1, ease: 'power3.out', stagger: 0.03 });
+      if (tagline) gsap.to('.hero-tagline', { opacity: 1, y: 0, duration: .8, delay: .4, ease: 'power3.out', from: { opacity: 0, y: 20 } });
+      if (scroll) gsap.to('#scroll-hint', { opacity: 1, duration: 1, delay: .8, ease: 'power3.out' });
+    } catch (e) {
+      chars.forEach(c => { c.style.opacity = 1; });
+      if (tagline) tagline.style.opacity = 1;
+      if (scroll) scroll.style.opacity = 1;
+    }
   }
 
   /* ─── scroll-triggered reveals ─────────────────────────────────────────
