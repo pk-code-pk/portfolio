@@ -62,7 +62,6 @@
     #music-toggle:hover { color: #fff; transform: scale(1.08); }
     #music-toggle svg { width: 18px; height: 18px; display: block; }
 
-    /* GYARADOS pose tuner — dark glassy panel matching the player bar */
     /* pokemon switch — mirrors the music-toggle look, sits in the same bar */
     #poke-toggle {
       background: none; border: none; padding: 4px 8px;
@@ -166,10 +165,6 @@
     </button>
   </div>
 
-  <!-- GYARADOS pose tuner: live sliders to dial in orientation/position/scale.
-       Visible only while gyarados is shown. Drives the model's BASE transform
-       (baseRot*/basePos/target size) so the idle sway + bone wave layer on top
-       and the tick() loop doesn't fight the sliders. -->
   <!-- elastic slider + player controls -->
   <script>
     (function () {
@@ -1826,10 +1821,10 @@
             const maxDim = Math.max(size.x, size.y, size.z) || 1;
             const s = GRENINJA_TARGET_SIZE / maxDim;
             g.scale.setScalar(s);
-            // scale-per-target-size-unit, so the pose tuner's size slider can
-            // map a desired world size → scalar without re-fitting the bbox.
+            // scale-per-target-size-unit, so the fixed target size maps cleanly
+            // to world scale without re-fitting the bbox.
             g.userData.unitScale  = s / GRENINJA_TARGET_SIZE;
-            g.userData.tunerSize  = GRENINJA_TARGET_SIZE;
+            g.userData.targetSize  = GRENINJA_TARGET_SIZE;
 
             // recompute box after scaling, then translate so its center
             // sits at the world origin used for framing, plus offsets.
@@ -1891,18 +1886,246 @@
               parseInt(a.name.match(re)[1], 10) - parseInt(b.name.match(re)[1], 10);
             gFound.spine.sort(gByNum(/Spine(\d+)/));
             gFound.tail.sort(gByNum(/Tail(\d+)/));
-            // head end (index 0, least movement) → tail tip (max movement):
-            // Head, Neck, Spine1..Spine5, Tail1..Tail9
-            const gyaChain = [
+            // ── FIGURE-8 PATH-FOLLOW RIG CALIBRATION ──────────────────────
+            // This rig is a Y-skeleton: two sub-chains share one junction
+            // (Waist≡Hips, same world point):
+            //   front half  Spine1→Spine2→…→Spine5→Neck→Head   (Head is the LEAF)
+            //   back  half  Tail1 →Tail2 →…→Tail9               (Tail9 is the LEAF)
+            // So the physical serpent, HEAD→TAIL, is:
+            //   Head, Neck, Spine5, Spine4, Spine3, Spine2, Spine1,
+            //   [junction], Tail1 … Tail9.
+            // We DRIVE this body order: each bone's local "restForward" axis
+            // (the local axis that points toward its hierarchy-child along the
+            // body) is re-aimed in parent space at the curve so the chain lays
+            // along + travels a figure-8 (see tick()).
+            gFound.spine.sort(gByNum(/Spine(\d+)/));   // Spine1..Spine5
+            // ── the Y-junction seam bone ──────────────────────────────────
+            // Rig (verified live):  Origin_01 → Waist_02 → { Spine1…(front),
+            // Hips_03 → Tail1…(back) }.  Spine1 and Hips_03 are SIBLINGS under
+            // Waist_02, all three coincident at the body centre. The TAIL hangs
+            // off Hips_03, which previously was NOT driven → the whole tail kept
+            // its rest orientation while the spine bent, hinging ~70-88° at the
+            // Spine1/Tail1 seam (the "mid-body disconnect"). Insert Hips_03 into
+            // the body order BETWEEN the spine and the tail so it is driven like
+            // any other body bone — it then aims from the seam into Tail1 and the
+            // tail base bends with the spine: one continuous serpent.
+            let gHips = null;
+            g.traverse(o => { if (o.isBone && /^Hips/.test(o.name) && !gHips) gHips = o; });
+            // body order head→tail (spine reversed: Spine5 is head-side):
+            const spineRev = gFound.spine.slice().reverse();
+            const gyaBody = [
               ...(gFound.head ? [gFound.head] : []),
               ...gFound.neck,
-              ...gFound.spine,
+              ...spineRev,
+              ...(gHips ? [gHips] : []),   // Y-junction seam (drives the tail base)
               ...gFound.tail
             ];
-            // snapshot rest rotations so the wave is an additive offset
-            gyaChain.forEach(b => {
+            // legacy alias (kept so nothing else referencing gyaChain breaks)
+            const gyaChain = gyaBody;
+            // mark head + neck so Pass B glues them tighter to the body (higher
+            // slerp factor) → head stays the front tip, never trails/detaches.
+            if (gyaBody[0]) gyaBody[0].userData.gyaHeadGlue = true;   // Head
+            if (gFound.neck) gFound.neck.forEach(n => { n.userData.gyaHeadGlue = true; });
+            // snapshot rest rotations (some old code paths read these)
+            gyaBody.forEach(b => {
               b.userData.rest = { x: b.rotation.x, y: b.rotation.y, z: b.rotation.z };
             });
+
+            // For each body bone, find its hierarchy-CHILD that is also the
+            // next body bone (so we know the local direction "down the body").
+            const bodySet = new Set(gyaBody);
+            const tmpV = new THREE.Vector3();
+            // capture the REST WORLD orientation with the GROUP AT IDENTITY
+            // (runtime sets group rotation to identity, so the dorsal-up
+            //  reference must be measured in that same frame). We restore the
+            //  reared rotation afterwards so the rest of the loader is unchanged.
+            const savedRot = g.rotation.clone();
+            g.rotation.set(0, 0, 0);
+            g.updateMatrixWorld(true);
+            gyaBody.forEach(b => {
+              // the body-child = the child bone that is in our body set
+              let bodyChild = b.children.find(c => c.isBone && bodySet.has(c));
+              // Head is a leaf in the body order → use EndHead for forward dir.
+              if (!bodyChild) {
+                bodyChild = b.children.find(c => c.isBone && /^EndHead/.test(c.name))
+                         || b.children.find(c => c.isBone && /^EndTail/.test(c.name))
+                         || b.children.find(c => c.isBone);
+              }
+              b.userData.gyaRestQuat = b.quaternion.clone();
+              // restForwardLocal = unit vector (in b's local space) toward that
+              // child. The child's local position IS already in b's space.
+              if (bodyChild) {
+                tmpV.copy(bodyChild.position).normalize();
+              } else {
+                tmpV.set(1, 0, 0);
+              }
+              b.userData.gyaRestFwd = tmpV.clone();
+              b.userData.gyaBodyChild = bodyChild || null;
+              // REST WORLD quaternion + restForward expressed in WORLD space.
+              // Re-aiming via a minimal WORLD-space rotation of these preserves
+              // the bone's rest ROLL (dorsal stays up) — no belly-up twist.
+              b.userData.gyaRestWorldQ = b.getWorldQuaternion(new THREE.Quaternion());
+              b.userData.gyaRestFwdWorld =
+                b.userData.gyaRestFwd.clone().applyQuaternion(b.userData.gyaRestWorldQ).normalize();
+              // scratch target world quaternion (filled each frame, no realloc)
+              b.userData.gyaWQ = new THREE.Quaternion();
+            });
+
+            // ── REST DORSAL ("back") reference, parallel-transported ──
+            // The model is REARED: the spine's rest-forward points roughly +Y
+            // (straight up) while the head's points +Z (toward camera) and the
+            // tail's points −Z. So orthogonalising a SINGLE world axis (e.g.
+            // +Y) against each bone's forward yields a dorsal that means
+            // DIFFERENT physical surfaces head→tail (head→+Y, spine→−Z): when
+            // the runtime roll forces each bone's dorsal onto the same
+            // transported up, the head & spine roll different faces up → the
+            // visible twist/kink at the head–neck junction.
+            //
+            // Fix: define ONE continuous dorsal surface by parallel-transport
+            // along the physical chain (head→tail) in REST pose — each bone's
+            // dorsal = the previous bone's dorsal re-orthogonalised against the
+            // new forward. Seeded once from world +Y. Head, Neck and Spine then
+            // share the SAME back surface, so re-rolling them onto the runtime
+            // transported frame keeps them a single continuous body.
+            {
+              const carry = new THREE.Vector3(0, 1, 0);  // dorsal seed (world up)
+              for (let i = 0; i < gyaBody.length; i++) {
+                const b  = gyaBody[i];
+                const fw = b.userData.gyaRestFwdWorld;
+                // transport: strip the new-forward component, renormalise
+                carry.addScaledVector(fw, -carry.dot(fw));
+                if (carry.lengthSq() < 1e-5) {
+                  // degenerate (carry ∥ forward): reseed from world +Y, else +Z
+                  carry.set(0, 1, 0).addScaledVector(fw, -fw.y);
+                  if (carry.lengthSq() < 1e-5) carry.set(0, 0, 1).addScaledVector(fw, -fw.z);
+                }
+                carry.normalize();
+                b.userData.gyaRestUpWorld = carry.clone();
+              }
+            }
+
+            // cumulative body-arc from the head (world distance between
+            // successive body-bone heads in the natural pose). Also the total.
+            const wpos = gyaBody.map(b => new THREE.Vector3().setFromMatrixPosition(b.matrixWorld));
+            const cumArc = [0];
+            for (let i = 1; i < gyaBody.length; i++) {
+              cumArc[i] = cumArc[i - 1] + wpos[i].distanceTo(wpos[i - 1]);
+            }
+            // include the tail-tip end so the last bone has a forward sample
+            const tailLeaf = gyaBody[gyaBody.length - 1];
+            const tailEnd  = tailLeaf.userData.gyaBodyChild;
+            let tailEndArc = cumArc[cumArc.length - 1];
+            if (tailEnd) {
+              const tp = new THREE.Vector3().setFromMatrixPosition(tailEnd.matrixWorld);
+              tailEndArc += tp.distanceTo(wpos[wpos.length - 1]);
+            }
+            const bodyArc = tailEndArc;
+            gyaBody.forEach((b, i) => { b.userData.gyaCumArc = cumArc[i]; });
+
+            // ── HEAD = keep its NATURAL rest pose relative to its parent ──
+            // The head follows the body fine via FK — it just must NOT derive
+            // its own aim/roll from the noisy trail (that caused the spaz). The
+            // head is rigidly attached to its parent in the model's REST mesh,
+            // so its native LOCAL rest quaternion already lines its tan
+            // underside up with the body's underside. We simply hold that rest
+            // local rotation every frame → head rides the body with zero
+            // independent DOF and its belly stays matched to the body's belly.
+            {
+              const headB = gyaBody[0];
+              if (headB) {
+                // BAKE the user's posed angle into the head's rest LOCAL
+                // rotation ONCE, here at load. After this the head bone is
+                // NEVER touched again — it's rigidly bolted to the neck at this
+                // angle and pure FK carries it naturally through every curve
+                // (no per-frame recompute = nothing to "switch" at the curves).
+                // keep the NATIVE (un-posed) rest so any future calibration
+                // hook can re-bake from a clean starting pose.
+                headB.userData.gyaHeadNative = headB.quaternion.clone();
+                const reBake = () => {
+                  const q = headB.userData.gyaHeadNative.clone();
+                  if (HEAD_TUNE.rx || HEAD_TUNE.ry || HEAD_TUNE.rz) {
+                    q.multiply(new THREE.Quaternion().setFromEuler(
+                      new THREE.Euler(HEAD_TUNE.rx, HEAD_TUNE.ry, HEAD_TUNE.rz)));
+                  }
+                  headB.quaternion.copy(q);
+                  headB.userData.gyaHeadRestLocal = q.clone();
+                };
+                reBake();
+                window.__gyaReBakeHead = reBake;          // calibration hook
+                headB.userData.gyaIsHead = true;
+                if (gyaBody[1]) gyaBody[1].userData.gyaIsNeck = true;
+              }
+            }
+
+            // restore the reared rotation we temporarily zeroed for calibration
+            g.rotation.copy(savedRot);
+            g.updateMatrixWorld(true);
+
+            // junction (Waist≡Hips) sits between Spine1 (last front) and Tail1.
+            // Its body-arc = cumArc of Spine1 (front leaf of the spine chain).
+            const spine1 = gFound.spine[0];                       // Spine1
+            const junctionArc = spine1 ? (spine1.userData.gyaCumArc || 0) : (bodyArc * 0.45);
+            // the group ORIGIN sits at the junction in the rig; we will move the
+            // group so the junction tracks the curve sample at junctionArc.
+            // find the junction bone (Waist) to read its offset from origin.
+            let junctionBone = null;
+            g.traverse(o => { if (o.isBone && /^Waist/.test(o.name) && !junctionBone) junctionBone = o; });
+
+            // ── build the FIGURE-8 (lemniscate) curve, arc-length sampled ──
+            // Horizontal ∞ facing the camera (X-Y screen plane) with a gentle
+            // Z weave so it dips in front of / behind the pk text. Sized so the
+            // curve length ≥ ~1.4× body arc → the long body never kinks.
+            // Sized BIG so curveLength ≈ 2.2–2.5× body arc: the serpent's body
+            // occupies only ~45% of the loop at a time → the head clearly LEADS
+            // around a large, readable ∞ and the tail TRAILS behind on the same
+            // track (instead of the body filling/coiling the whole tight 8).
+            const GYA8_A = 12.0;   // half-width  (X)  — wide lobes, both visible
+            const GYA8_B = 7.0;    // half-height (Y)  — tall enough to read as 8
+            const GYA8_Z = 3.0;    // depth weave (Z)   gentle in/out of the text
+            const fig8Pts = [];
+            const FN = 240;
+            for (let i = 0; i < FN; i++) {
+              const th = (i / FN) * Math.PI * 2;
+              // x = A·sin t  → single span; y = B·sin t·cos t → the two lobes
+              // stacked → a vertical-ish 8. Rotate into a lying-down ∞ by
+              // swapping: lobes side-by-side. Classic horizontal ∞:
+              //   x = A·cos t ,  y = B·sin(2t)/2  (crossover at the middle)
+              const x = GYA8_A * Math.cos(th);
+              const y = GYA8_B * Math.sin(2 * th) * 0.5;
+              const z = GYA8_Z * Math.sin(th);          // one weave per loop
+              fig8Pts.push(new THREE.Vector3(x, y, z));
+            }
+            const fig8Curve = new THREE.CatmullRomCurve3(fig8Pts, true, 'catmullrom', 0.5);
+            // arc-length LUT
+            const LUTN = 1200;
+            fig8Curve.arcLengthDivisions = LUTN;
+            fig8Curve.updateArcLengths();
+            const curveLength = fig8Curve.getLength();
+
+            // PROCESSING order must be parent-before-child in the THREE
+            // hierarchy (so a child reads its parent's fresh world matrix). The
+            // spine sub-chain is rooted at Spine1 (Head is the leaf), so we
+            // process Spine1→…→Spine5→Neck→Head, then Tail1→…→Tail9. Each bone
+            // keeps its own body-arc + body-child (for the aim), independent of
+            // processing order.
+            const gyaProc = [
+              ...gFound.spine,            // Spine1..Spine5 (shallow→deep)
+              ...gFound.neck,            // Neck
+              ...(gFound.head ? [gFound.head] : []),
+              ...(gHips ? [gHips] : []), // Y-junction seam — MUST precede Tail1
+              ...gFound.tail             // Tail1..Tail9 (child of Hips)
+            ];
+
+            g.userData.gyaBody       = gyaBody;
+            g.userData.gyaProc       = gyaProc;
+            g.userData.gyaJunction   = junctionBone;
+            g.userData.gyaJunctionArc= junctionArc;
+            g.userData.gyaBodyArc    = bodyArc;
+            g.userData.gyaCurve      = fig8Curve;
+            g.userData.gyaCurveLen   = curveLength;
+            g.userData.gyaTailEndArc = tailEndArc;
+            log(`gya path · bodyArc ${bodyArc.toFixed(2)} · curveLen ${curveLength.toFixed(2)} (×${(curveLength/bodyArc).toFixed(2)}) · junctionArc ${junctionArc.toFixed(2)} · bones ${gyaBody.length}`);
+
             g.userData.gyaChain = gyaChain;
 
             // no baked clips on this rig — drive bones procedurally.
@@ -1939,10 +2162,9 @@
           if (pokeName) pokeName.textContent = greninjaModel ? 'gyarados' : 'loading…';
           await loadGreninja();
           if (model) scene.remove(model);            // pull rayquaza out
-          // fold the framing offsets into basePos ONCE so basePos is the true
-          // resting center (the pose tuner edits basePos directly; the tick
-          // idle-sway adds onto it without re-applying the offsets). Guarded
-          // so re-showing doesn't accumulate the offset each toggle.
+          // fold the framing offsets into basePos ONCE so it remains the true
+          // resting center. The idle sway adds on top without re-applying the
+          // offsets, and the guard prevents accumulation on re-show.
           if (!greninjaModel.userData.baseFramed) {
             greninjaModel.userData.basePos.x += GRENINJA_X_OFFSET;
             greninjaModel.userData.basePos.y += GRENINJA_Y_OFFSET;
@@ -1997,6 +2219,54 @@
     /* ── animate ──────────────────────────────────────────────────── */
     const clock = new THREE.Clock();
     const tmpLookAt = new THREE.Vector3();
+
+    // ── preallocated temporaries for the gyarados figure-8 path-follow
+    //    (allocation-free hot loop) ─────────────────────────────────────
+    const _gT0   = new THREE.Vector3();   // sample at bone i
+    const _gT1   = new THREE.Vector3();   // sample at the bone's body-child
+    const _gDir  = new THREE.Vector3();   // desired world forward
+    const _gPQ   = new THREE.Quaternion();// parent world quaternion
+    const _gPQi  = new THREE.Quaternion();// its inverse
+    const _gDelta= new THREE.Quaternion();// minimal world-space aim rotation
+    const _gRoll = new THREE.Quaternion();// roll-to-dorsal-up correction
+    const _gTgtW = new THREE.Quaternion();// target world quaternion
+    const _gTgt  = new THREE.Quaternion();// target bone-local quaternion
+    const _gJW   = new THREE.Vector3();   // junction world position
+    const _gSamp = new THREE.Vector3();   // junction target sample
+    const _gUp    = new THREE.Vector3();  // parallel-transported up
+    const _gWorldUp = new THREE.Vector3(0, 1, 0);
+    const _gHeadUp  = new THREE.Vector3(0, 1, 0); // head up carried across frames
+    const _gCurUp = new THREE.Vector3();  // dorsal after aim
+    const _gWantUp= new THREE.Vector3();  // desired (transported) up
+    // head-damping: previous-frame head target WORLD quat, so we can rate-limit
+    // the head's per-frame rotation and never let it snap ~180° (cooked head).
+    const _gHeadPrevWQ = new THREE.Quaternion();
+    let   _gHeadPrevOK = false;            // becomes true once seeded
+    // ── live gyarados head calibration state ──────────────────────────
+    // an ADDITIVE local-euler offset applied to the head bone after the path
+    // sets it, plus the head/neck glue factors.
+    const HEAD_TUNE = { rx: 1.058, ry: 1.338, rz: 0.748, neckGlue: 0.6, headGlue: 0.95, pause: false };
+    let _gPausedT = 0;   // frozen clock value captured when pause turns on
+    const _gHeadOff = new THREE.Quaternion();   // scratch for the offset
+    const _gHeadEul = new THREE.Euler();
+    let   _gLastT = null;                 // for real dt
+    let   _gSHead = 0;                    // head arc-distance along the 8
+    // ── trailing-history ("snake") buffer ──────────────────────────────
+    // The head drives along the figure-8; every frame we push its world
+    // position + the cumulative arc it has TRAVELLED into a ring buffer.
+    // Each body bone is then aimed at the trail point exactly its own
+    // rest-arc-distance behind the head, so the body follows the head's
+    // own path and consecutive bones stay one bone-length apart (no
+    // bunching, no separation). seeded lazily on first greninja frame.
+    const _GHIST_N = 2048;                // ring capacity (~34s at 60fps)
+    const _gHistPos = new Float32Array(_GHIST_N * 3);
+    const _gHistArc = new Float32Array(_GHIST_N);
+    let   _gHistHead = -1;                 // index of newest sample (-1 = empty)
+    let   _gHistCount = 0;                 // how many valid samples
+    let   _gHeadTravel = 0;                // cumulative arc the head has travelled
+    let   _gWarmFrames = 0;                // >0 = snap bones to target (no ease-in)
+    const _gHP0 = new THREE.Vector3();     // trail sample (this bone)
+    const _gHP1 = new THREE.Vector3();     // trail sample (toward head)
 
     // (#1) parent posts {__heroAction:'pause'|'throttle'|'resume'}:
     //   pause    → fully off-screen: stop rendering entirely.
@@ -2152,71 +2422,300 @@
       }
       window.__lastT = t;
 
-      // GYARADOS — a RIGGED sea-serpent. Its real skeleton (head→tail chain
-      // in userData.gyaChain) is driven with a Rayquaza-style PER-BONE
-      // travelling wave, so the body undulates for real (no fake vertex-
-      // shader displacement). Gyarados is huge + menacing: SLOW frequency,
-      // LONG wavelength (~1.25 waves → a single smooth S along the body),
-      // generous amplitude that grows toward the tail tip. A subtle vertical
-      // weave (.x) + roll (.z) at offset phases adds 3D life; a gentle
-      // whole-group bob/sway underneath gives buoyancy. Music level (amp)
-      // lifts the swim a touch on the beat. Framerate-independent (clock t).
+      // GYARADOS — a RIGGED sea-serpent whose ACTUAL BODY BONES conform to and
+      // TRAVEL a figure-8 (lemniscate) path: the head leads into each curve,
+      // the spine follows the arc, the tail trails through the same track, like
+      // a snake following its own path. We arc-length-sample the curve, place a
+      // moving "head arc-distance" (sHead) that advances slowly, and for each
+      // body bone sample the curve at sHead − cumArc[i]. Each bone's restForward
+      // axis is re-aimed (in parent space) at the next-toward-tail sample so the
+      // chain lays along the curve. A small anguilliform wave + banking + fin
+      // follow-through ride on top for life. Group is moved so the junction bone
+      // tracks the curve (group rotation fixed so the 8 faces the camera).
       if (currentPokemon === 'greninja' && greninjaModel) {
-        const chain = greninjaModel.userData.gyaChain;
-        if (chain && chain.length) {
-          const N      = chain.length;
-          const omega  = 0.95;                 // slow, heavy phase speed
-          // ~0.9 waves along the body → ONE long, open S that extends out
-          // (fewer waves = the body stretches into a flowing curve instead of
-          // bunching into a tight hunched coil).
-          const k      = (0.9 * 2 * Math.PI) / Math.max(1, N - 1);
-          const react  = 1 + amp * 0.35;       // gentle beat boost
-          const breathe = 0.8 + Math.sin(t * 0.22) * 0.2;
-          // Rayquaza-style BASE+TIP envelope: the WHOLE body undulates (the
-          // head/neck get a real baseline amplitude, not ~0) and it grows
-          // toward the tail. Combined with a MULTI-HARMONIC wave (below) this
-          // flows snakelike and extends out instead of bunching into a hump.
-          const yBase  = 0.15, yTip = 0.40;    // lateral (yaw) — head moves too
-          const xBase  = 0.05, xTip = 0.15;    // secondary vertical weave
-          const zBase  = 0.03, zTip = 0.11;    // body roll
-          for (let i = 0; i < N; i++) {
-            const b = chain[i];
-            if (!b || !b.userData.rest) continue;
-            const u    = i / Math.max(1, N - 1);
-            // smoothstep growth (not linear) → the bend is distributed evenly
-            // down the body instead of kinking at the neck/upper-spine (the
-            // hump). uShaped eases 0→1, so neighbouring bones differ gently.
-            const uShaped = u * u * (3 - 2 * u);
-            const ay   = (yBase + (yTip - yBase) * uShaped) * breathe * react;
-            const ax   = (xBase + (xTip - xBase) * uShaped) * breathe;
-            const az   = (zBase + (zTip - zBase) * uShaped) * breathe;
-            const ph   = omega * t - k * i;
-            // primary travelling wave + a slow half-harmonic + a tiny fast
-            // ripple (same recipe as Rayquaza) — three sines sum to an organic,
-            // fluid undulation rather than a stiff mechanical single bend.
-            const wave =
-              Math.sin(ph)                               * 0.85 +
-              Math.sin(omega * 0.45 * t - k * 0.55 * i + 1.2) * 0.30 +
-              Math.sin(omega * 1.9  * t - k * 1.30 * i + 0.7) * 0.10;
-            b.rotation.y = b.userData.rest.y + wave * ay;
-            b.rotation.x = b.userData.rest.x + Math.sin(ph + Math.PI / 2) * ax;
-            b.rotation.z = b.userData.rest.z + Math.sin(omega * 0.6 * t - k * 0.7 * i) * az;
+        const ud    = greninjaModel.userData;
+        const body  = ud.gyaBody;
+        const curve = ud.gyaCurve;
+        if (body && body.length && curve) {
+          // real, framerate-independent dt (clamped against tab/throttle gaps)
+          const dt = (_gLastT == null) ? 0.016 : Math.min(0.05, t - _gLastT);
+          _gLastT = t;
+          // frozen clock for PAUSE: when paused, all gyarados motion (travel,
+          // undulation, bob) uses the time captured at the moment pause turned
+          // on, so the body holds completely still while head sliders still
+          // update live. (orientation passes below still run.)
+          if (HEAD_TUNE.pause) { if (_gPausedT === 0) _gPausedT = t; }
+          else { _gPausedT = 0; }
+          const gt = HEAD_TUNE.pause ? _gPausedT : t;
+
+          const L        = ud.gyaCurveLen;
+          const bodyArc  = ud.gyaBodyArc;
+          const react    = 1 + amp * 0.30;
+          // SLOW & heavy: full figure-8 loop every ~13s (a touch faster on the
+          // beat). speed in arc-units/sec = L / period.
+          const PERIOD   = 13.0 / (1 + amp * 0.20);
+          // pause: freeze the figure-8 travel (body holds position) while the
+          // orientation passes keep running, so head sliders update live on the
+          // frozen pose. Driven by the pause flag.
+          if (!HEAD_TUNE.pause) _gSHead += (L / PERIOD) * dt;
+          if (_gSHead > 1e7) _gSHead -= 1e7;        // guard against unbounded growth
+
+          // ── small anguilliform undulation layered on the path ──
+          // a travelling lateral wave, amplitude growing head→tail (envelope),
+          // perturbs the arc-sample offset sideways so it SWIMS, not snaps.
+          const UND_FREQ = 0.32 * Math.PI * 2;      // ~0.32 Hz, slow/heavy
+          const UND_WAVES = 1.4;                    // ~1.4 visible S-curves
+          const UND_AMP  = 0.28 * react;            // world-unit lateral push
+
+          // helper: arc-distance → world point on the curve (arc-length LUT via
+          // getPointAt). Writes into the given target vector.
+          const sampleAt = (s, out) => {
+            let frac = (s % L) / L;
+            if (frac < 0) frac += 1;
+            curve.getPointAt(frac, out);
+            return out;
+          };
+
+          // ── TRAILING-HISTORY ("snake") drive ─────────────────────────
+          // The HEAD is the single driver: it rides the figure-8 (sampled at
+          // _gSHead). We record its WORLD position + cumulative travelled arc
+          // into a ring buffer each frame, then place every body bone at the
+          // trail point exactly its own rest-arc-distance BEHIND the head.
+          // Because the offsets are the bones' REAL arc lengths, consecutive
+          // bones stay one bone-length apart → the body follows the head's own
+          // path around the 8 and CANNOT bunch up or separate.
+          greninjaModel.rotation.set(0, 0, 0);
+          const center = modelCenter;                // path center = pk logo
+          const bobY = Math.sin(gt * 0.5) * 0.6 * react;
+
+          // current HEAD world target = figure-8 sample at _gSHead, centred on
+          // the logo (+ buoyancy bob). advance the travelled-arc by the world
+          // distance the head actually moved this frame.
+          sampleAt(_gSHead, _gT0);
+          const headWX = center.x + _gT0.x;
+          const headWY = center.y + _gT0.y + bobY;
+          const headWZ = center.z + _gT0.z;
+          if (_gHistHead < 0) {
+            // FIRST FRAME PRE-SEED: fill the buffer as if the head had ALREADY
+            // been swimming the figure-8 for at least a full body length. We
+            // lay a dense trail BACKWARD along the curve (decreasing _gSHead)
+            // covering bodyArc + margin, so trailAt(d) for d∈[0,bodyArc]
+            // returns spread-out points on the very first frame → the body is
+            // already strung along the 8 (no bunch-at-a-point then spread).
+            const seedSpan = bodyArc * 1.25 + 2.0;   // arc covered behind head
+            const SEED_N   = Math.min(_GHIST_N, 600); // dense → smooth interp
+            // newest (head) sample sits at the highest travelled-arc; we want
+            // trailAt(0) === head, so head travelled-arc = seedSpan.
+            _gHeadTravel = seedSpan;
+            // fill indices 0..SEED_N-1 oldest→newest so _gHistArc increases
+            // monotonically with index; head ends up at index SEED_N-1.
+            for (let h = 0; h < SEED_N; h++) {
+              // behind-distance for this sample: oldest (h=0) is seedSpan back,
+              // newest (h=SEED_N-1) is 0 back (the head itself).
+              const behind = seedSpan * (1 - h / (SEED_N - 1));
+              sampleAt(_gSHead - behind, _gT0);      // curve point `behind` arc back
+              _gHistPos[h*3]   = center.x + _gT0.x;
+              _gHistPos[h*3+1] = center.y + _gT0.y + bobY;
+              _gHistPos[h*3+2] = center.z + _gT0.z;
+              _gHistArc[h]     = _gHeadTravel - behind;  // = seedSpan - behind
+            }
+            _gHistHead  = SEED_N - 1;
+            _gHistCount = SEED_N;
+            // snap bones straight to their settled pose for the first few
+            // frames so the body doesn't visibly ease in from rest (~1s).
+            _gWarmFrames = 8;
+          } else {
+            const px = _gHistPos[_gHistHead*3], py = _gHistPos[_gHistHead*3+1], pz = _gHistPos[_gHistHead*3+2];
+            const step = Math.hypot(headWX-px, headWY-py, headWZ-pz);
+            _gHeadTravel += step;
+            _gHistHead = (_gHistHead + 1) % _GHIST_N;
+            _gHistPos[_gHistHead*3] = headWX; _gHistPos[_gHistHead*3+1] = headWY; _gHistPos[_gHistHead*3+2] = headWZ;
+            _gHistArc[_gHistHead] = _gHeadTravel;
+            if (_gHistCount < _GHIST_N) _gHistCount++;
           }
-        }
-        // whole-group buoyancy bob/sway UNDER the bone wave
-        const b = greninjaModel.userData.basePos;
-        if (b) {
-          const react = 1 + amp * 0.5;
-          greninjaModel.position.y = b.y + Math.sin(t * 0.26)       * 0.45 * react;
-          greninjaModel.position.x = b.x + Math.sin(t * 0.15 + 0.5) * 0.45;
-          greninjaModel.position.z = b.z + Math.sin(t * 0.13 + 1.2) * 0.35;
-          const baseRotX = greninjaModel.userData.baseRotX || 0;
-          const baseRotY = greninjaModel.userData.baseRotY || 0;
-          const baseRotZ = greninjaModel.userData.baseRotZ || 0;
-          // additive idle sway on top of the rearing 3/4 base pose
-          greninjaModel.rotation.z = baseRotZ + Math.sin(t * 0.12)       * 0.05;            // slow coil
-          greninjaModel.rotation.y = baseRotY + Math.sin(t * 0.045)      * 0.12;            // slow hunting survey
-          greninjaModel.rotation.x = baseRotX + Math.sin(t * 0.16 + 0.6) * 0.05 * react;   // gentle rear
+
+          // trailAt(d, out): world point that is travelled-arc-distance `d`
+          // BEHIND the head (d≥0), interpolated along the recorded trail.
+          // Walks back from the newest sample until the bracketing pair is
+          // found, then lerps by arc. Clamps to the oldest sample.
+          const trailAt = (d, out) => {
+            const targetArc = _gHeadTravel - d;
+            let idx = _gHistHead;
+            for (let k = 1; k < _gHistCount; k++) {
+              const prev = (_gHistHead - k + _GHIST_N) % _GHIST_N;
+              if (_gHistArc[prev] <= targetArc) {
+                // bracket [prev, idx]; lerp by arc
+                const a0 = _gHistArc[prev], a1 = _gHistArc[idx];
+                const f = (a1 > a0) ? (targetArc - a0) / (a1 - a0) : 0;
+                out.set(
+                  _gHistPos[prev*3]   + (_gHistPos[idx*3]   - _gHistPos[prev*3])   * f,
+                  _gHistPos[prev*3+1] + (_gHistPos[idx*3+1] - _gHistPos[prev*3+1]) * f,
+                  _gHistPos[prev*3+2] + (_gHistPos[idx*3+2] - _gHistPos[prev*3+2]) * f
+                );
+                return out;
+              }
+              idx = prev;
+            }
+            // ran past the oldest sample → clamp to it
+            out.set(_gHistPos[idx*3], _gHistPos[idx*3+1], _gHistPos[idx*3+2]);
+            return out;
+          };
+
+          // 1) MOVE the group so the JUNCTION bone lands on its trail point
+          //    (junctionArc behind the head). group rotation fixed (identity)
+          //    so the 8 plane faces camera.
+          const junctionArc = ud.gyaJunctionArc;
+          trailAt(junctionArc, _gSamp);
+          greninjaModel.position.set(_gSamp.x, _gSamp.y, _gSamp.z);
+          greninjaModel.updateMatrixWorld(true);
+          const junction = ud.gyaJunction;
+          if (junction) {
+            _gJW.setFromMatrixPosition(junction.matrixWorld);
+            // delta = where we WANT the junction − where it actually is
+            greninjaModel.position.x += _gSamp.x - _gJW.x;
+            greninjaModel.position.y += _gSamp.y - _gJW.y;
+            greninjaModel.position.z += _gSamp.z - _gJW.z;
+            greninjaModel.updateMatrixWorld(true);
+          }
+
+          // 2) ORIENT — TWO PASSES.
+          //   Pass A walks the body HEAD→TAIL and builds, per bone, a target
+          //   WORLD quaternion using a ROTATION-MINIMIZING FRAME (parallel
+          //   transport): forward = trail tangent, and an "up" carried smoothly
+          //   from the head so it never flips at the lobe tops or the crossover
+          //   (a fixed world-up basis degenerates there → the classic head-flip
+          //   + fold). Pass B applies those targets in hierarchy order (parent
+          //   before child) so FK lays the chain out cleanly.
+          const bodyArr = ud.gyaBody;
+          const NB = bodyArr.length;
+
+          // seed the transported up: this frame, carry the head's up from the
+          // PREVIOUS frame (temporal continuity) re-orthogonalized against the
+          // head tangent; first time, start from world +Y.
+          // NOTE: start at i=1 — the HEAD (i=0) is NOT aimed from the trail
+          // anymore; it's a rigid continuation of the neck (see Pass B). This
+          // removes the head's noisy self-aim + roll-flip (the spazz).
+          for (let i = 1; i < NB; i++) {
+            const b = bodyArr[i];
+            const child = b.userData.gyaBodyChild;
+            // body-child arc: the NEXT body bone (tail-ward). For the HEAD (and
+            // any bone whose body-child is a leaf End-bone with no gyaCumArc)
+            // we must NOT fall back to gyaTailEndArc — that aims the bone at the
+            // far TAIL point (head detach/mis-aim bug). Instead use the next
+            // bone in body order (one short step tail-ward) so the head's
+            // forward tangent is the true local body direction.
+            let childArc;
+            if (child && typeof child.userData.gyaCumArc === 'number') {
+              childArc = child.userData.gyaCumArc;
+            } else if (i + 1 < NB && typeof bodyArr[i+1].userData.gyaCumArc === 'number') {
+              childArc = bodyArr[i+1].userData.gyaCumArc;     // next body bone
+            } else {
+              childArc = ud.gyaTailEndArc;                    // genuine tail leaf
+            }
+            // this bone sits `cumArc[i]` behind the head; it AIMS toward the
+            // trail point of its body-child (further behind = tail-ward).
+            trailAt(b.userData.gyaCumArc, _gHP0);
+            trailAt(childArc,             _gHP1);
+            _gT0.copy(_gHP0);
+            _gT1.copy(_gHP1);
+
+            // anguilliform wave (grows head→tail) perturbs the child sample so
+            // the body swims rather than rigidly snapping to the trail.
+            const u   = Math.min(1, b.userData.gyaCumArc / bodyArc);
+            const env = u * u;
+            const ph  = UND_FREQ * gt - UND_WAVES * Math.PI * 2 * u;
+            _gT1.z += Math.sin(ph) * UND_AMP * env;
+            _gT1.y += Math.cos(ph) * UND_AMP * 0.4 * env;
+
+            // tangent toward the body-child sample
+            _gDir.copy(_gT1).sub(_gT0);
+            if (_gDir.lengthSq() < 1e-9) { b.userData.gyaWQ.copy(b.userData.gyaRestWorldQ); continue; }
+            _gDir.normalize();
+
+            // ── rotation-minimizing up ──
+            if (i === 1) {
+              // first processed (neck) bone: seed from last frame's carried up
+              // (temporal continuity), else world +Y
+              _gUp.copy(_gHeadUp.lengthSq() > 1e-6 ? _gHeadUp : _gWorldUp);
+            }
+            // parallel transport: remove tangent component, renormalize. If it
+            // collapses (up ∥ tangent at a pole), fall back to world +Y / +X.
+            _gUp.addScaledVector(_gDir, -_gUp.dot(_gDir));
+            if (_gUp.lengthSq() < 1e-4) {
+              _gUp.copy(_gWorldUp).addScaledVector(_gDir, -_gWorldUp.dot(_gDir));
+              if (_gUp.lengthSq() < 1e-4) _gUp.set(1, 0, 0).addScaledVector(_gDir, -_gDir.x);
+            }
+            _gUp.normalize();
+            if (i === 1) _gHeadUp.copy(_gUp);        // store for next frame (temporal seed)
+
+            // build the target WORLD quaternion from (forward, up):
+            //  1) aim restForward→tangent (minimal),
+            //  2) roll about the tangent so the bone's dorsal (rest up) lands on
+            //     the transported up — keeps blue-back up, no belly-up flip.
+            _gDelta.setFromUnitVectors(b.userData.gyaRestFwdWorld, _gDir);
+            _gTgtW.copy(_gDelta).multiply(b.userData.gyaRestWorldQ);
+            // current dorsal-world after the aim:
+            _gCurUp.copy(b.userData.gyaRestUpWorld).applyQuaternion(_gDelta);
+            // project both onto the plane ⟂ tangent, then roll one onto the other
+            _gCurUp.addScaledVector(_gDir, -_gCurUp.dot(_gDir));
+            _gWantUp.copy(_gUp).addScaledVector(_gDir, -_gUp.dot(_gDir));
+            if (_gCurUp.lengthSq() > 1e-6 && _gWantUp.lengthSq() > 1e-6) {
+              _gCurUp.normalize(); _gWantUp.normalize();
+              _gRoll.setFromUnitVectors(_gCurUp, _gWantUp);
+              _gTgtW.premultiply(_gRoll);
+            }
+            b.userData.gyaWQ.copy(_gTgtW);
+          }
+
+          // ── NECK softening (optional, gentle) ───────────────────────────
+          // The neck blends a little toward the spine so the front reads as one
+          // piece. The HEAD is NOT touched here anymore — it's a rigid
+          // continuation of the neck applied in Pass B (no self-aim, no
+          // rate-limit, no roll-flip). Framerate-independent in Pass B.
+          if (NB >= 3 && HEAD_TUNE.neckGlue > 0) {
+            bodyArr[1].userData.gyaWQ.slerp(bodyArr[2].userData.gyaWQ, HEAD_TUNE.neckGlue * 0.5);
+          }
+
+          // Pass B — apply, parents before children. Framerate-independent
+          // exponential damping (1 - e^(-k·dt)) replaces the old fixed-factor
+          // slerps + rate-limiter (those were framerate-dependent and stacked).
+          // The HEAD is handled specially: it is set to the neck's CURRENT world
+          // orientation × the fixed rest offset (captured at load), so it is
+          // rigidly the neck's front tip — the single change that removes the
+          // jitter/snap/roll-flip by construction.
+          const proc = ud.gyaProc;
+          const warming = _gWarmFrames > 0;
+          // double-cover guard helper (nearer hemisphere before slerp)
+          const _qguard = (cur, tgt) => { if (cur.dot(tgt) < 0) tgt.set(-tgt.x,-tgt.y,-tgt.z,-tgt.w); };
+          for (let i = 0; i < proc.length; i++) {
+            const b = proc[i];
+            if (!b) continue;
+
+            if (b.userData.gyaIsHead) {
+              // HEAD = DO NOTHING. The posed angle was baked into its rest local
+              // rotation at load, so it's rigidly bolted to the neck and pure FK
+              // carries it through every curve — naturally, like a real skeleton.
+              // No per-frame recompute → nothing can "switch" at the curves.
+              // If these calibration values change, the rest local is re-baked
+              // once by the calibration hook.
+              continue;
+            }
+
+            if (!b.userData.gyaWQ) continue;
+            b.parent.getWorldQuaternion(_gPQ);
+            _gPQi.copy(_gPQ).invert();
+            _gTgt.copy(_gPQi).multiply(b.userData.gyaWQ);
+            _qguard(b.quaternion, _gTgt);
+            // damping rate (1/s). LOWER = smoother / more jitter-rejecting.
+            // The NECK is the head's parent, so any neck jitter shows up in the
+            // head → damp the neck EXTRA smooth (low k) to kill head jitter at
+            // the source. Body stays responsive.
+            const k = warming ? 1000 : (b.userData.gyaIsNeck ? 6 : 10);
+            const a = warming ? 1 : (1 - Math.exp(-k * dt));
+            b.quaternion.slerp(_gTgt, a);
+            b.updateWorldMatrix(false, false);       // refresh for the child
+          }
+          if (_gWarmFrames > 0) _gWarmFrames--;
         }
       }
 
@@ -2557,6 +3056,7 @@
       composer.render();
     }
     tick();
+
   </script>
 </body>
 </html>

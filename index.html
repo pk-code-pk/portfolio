@@ -1726,7 +1726,11 @@
 </section>
 
 <!-- music player (parent-owned; drives the audio + feeds amplitude to the hero iframe) -->
-<audio id="bg-audio" src="music/bg-music.mp3" loop preload="auto" playsinline></audio>
+<!-- preload="none": the 4.6MB track is NOT downloaded on page load (it was
+     the single biggest asset and competed with the hero for mobile-data
+     bandwidth). Music is gesture-started anyway, so it streams in only once
+     the user actually plays it — big first-load win on mobile data. -->
+<audio id="bg-audio" src="music/bg-music.mp3" loop preload="none" playsinline></audio>
 <div id="sound-hint">tap for sound</div>
 <div id="music-player">
   <button id="music-toggle" aria-label="Toggle music">
