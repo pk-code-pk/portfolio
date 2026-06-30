@@ -269,6 +269,17 @@
     }
     #music-toggle:hover { color: #fff; transform: scale(1.08); }
     #music-toggle svg { width: 18px; height: 18px; display: block; }
+    /* pokemon switch — swaps the 3D hero creature (rayquaza ↔ gyarados) */
+    #poke-switch {
+      background: none; border: none; padding: 4px 8px;
+      color: rgba(255,255,255,0.8); cursor: pointer;
+      display: flex; align-items: center; gap: 7px;
+      font: 600 11px/1 'Hanken Grotesk', ui-monospace, monospace;
+      letter-spacing: .14em; text-transform: lowercase; white-space: nowrap;
+      transition: color .25s, transform .2s;
+    }
+    #poke-switch:hover { color: #fff; transform: scale(1.06); }
+    #poke-switch svg { width: 15px; height: 15px; display: block; }
     /* invisible counterweight = play button (18px svg + 4px×2 padding) so
        the slider track sits on the exact viewport-center axis */
     .np-balance { width: 26px; flex: 0 0 26px; }
@@ -1730,9 +1741,11 @@
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 4V5L7 9H3zm10.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>
     </div>
   </div>
-  <!-- spacer mirrors the play button on the left so the SLIDER TRACK
-       (not the whole pill) lands on the viewport center axis -->
-  <span class="np-balance" aria-hidden="true"></span>
+  <!-- pokemon switch: swaps the 3D hero creature in the iframe -->
+  <button id="poke-switch" aria-label="Switch pokemon" title="Switch pokemon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    <span class="poke-name" id="poke-switch-name">gyarados</span>
+  </button>
 </div>
 
 <!-- OLD HERO (stashed — original dot-pattern hero). To restore: remove
@@ -3029,6 +3042,26 @@
       clearTimeout(scrollSettle);
       scrollSettle = setTimeout(() => { scrolling = false; syncHero(); }, 180);
     }, { passive: true });
+  })();
+
+  /* ─── pokemon switch button → tells the hero iframe to swap creature ──
+     The scene's own toggle is hidden when embedded, so the parent owns
+     this control. Clicking postMessages {__heroAction:'switchPokemon'}
+     into the iframe (same pattern as pause/resume). We track the name
+     locally to keep the button label in sync (hero starts on rayquaza). */
+  (function () {
+    const btn  = document.getElementById('poke-switch');
+    const frame = document.getElementById('hero-frame');
+    if (!btn || !frame) return;
+    const nameEl = document.getElementById('poke-switch-name');
+    let current = 'rayquaza';                 // hero's default creature
+    const other = () => current === 'rayquaza' ? 'gyarados' : 'rayquaza';
+    if (nameEl) nameEl.textContent = other(); // label shows what you'll switch TO
+    btn.addEventListener('click', () => {
+      if (frame.contentWindow) frame.contentWindow.postMessage({ __heroAction: 'switchPokemon' }, '*');
+      current = other();
+      if (nameEl) nameEl.textContent = other();
+    });
   })();
 
   /* ─── parent-owned audio engine + music player ────────────────────

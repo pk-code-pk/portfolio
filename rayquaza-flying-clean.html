@@ -62,6 +62,7 @@
     #music-toggle:hover { color: #fff; transform: scale(1.08); }
     #music-toggle svg { width: 18px; height: 18px; display: block; }
 
+    /* GYARADOS pose tuner — dark glassy panel matching the player bar */
     /* pokemon switch — mirrors the music-toggle look, sits in the same bar */
     #poke-toggle {
       background: none; border: none; padding: 4px 8px;
@@ -165,6 +166,10 @@
     </button>
   </div>
 
+  <!-- GYARADOS pose tuner: live sliders to dial in orientation/position/scale.
+       Visible only while gyarados is shown. Drives the model's BASE transform
+       (baseRot*/basePos/target size) so the idle sway + bone wave layer on top
+       and the tick() loop doesn't fight the sliders. -->
   <!-- elastic slider + player controls -->
   <script>
     (function () {
@@ -1135,8 +1140,8 @@
        per-pokemon target each frame so the toggle never flickers and
        always settles back to the exact rayquaza baseline. */
     const greninjaKey = new THREE.DirectionalLight(GREN_CYAN.getHex(), 0.0);
-    greninjaKey.position.set(-30, 40, 40);
-    scene.add(greninjaKey);
+    greninjaKey.position.set(-30, 40, 60);   // bias toward camera so the
+    scene.add(greninjaKey);                   // creature's facing side is lit
 
     // baselines captured from the rayquaza setup above
     const RAY_SUN_COLOR = sunLight.color.clone();
@@ -1152,7 +1157,8 @@
     const GRN_RIM_COLOR = new THREE.Color(0x4fd6ff);  // strong aqua rim
     const GRN_RIM_INT   = 1.6;
     const GRN_AMB_COLOR = new THREE.Color(0x16384a);  // teal ambient
-    const GRN_KEY_INT   = 1.1;
+    const GRN_KEY_INT   = 2.2;   // brighter cyan key so gyarados reads
+                                 // against the heavy underwater haze
 
     const _lc = new THREE.Color();
     // lerp the scene lighting toward the active pokemon's target. Called
@@ -1187,33 +1193,40 @@
             if (prev) prev(shader);
             shader.uniforms.uRimColor = { value: GREN_CYAN };
             shader.uniforms.uRimI     = greninjaRim.intensity;
-            // declare a global accumulator + compute the fresnel where the
-            // geometric `normal` and `vViewPosition` are both in scope
-            // (right after normal setup, inside the lit pipeline), then add
-            // it at the very end. Doing the read here avoids the end-of-
-            // shader scope where those vars may be optimised away.
+            // Robust fresnel rim: declare the uniforms (the previous version
+            // assumed three.js auto-declared them, and relied on `normal` /
+            // `<dithering_fragment>` being present — which is fragile across
+            // material configs and produced a non-rendering program for the
+            // gyarados PBR materials). Here we declare the uniforms ourselves
+            // and add the rim right after <opaque_fragment>, computing the
+            // fresnel from the always-present `vNormal` + `vViewPosition`
+            // varyings so the lit PBR output is untouched on every material.
             shader.fragmentShader = shader.fragmentShader.replace(
               '#include <common>',
               `#include <common>
-               vec3 gRimAccum = vec3(0.0);`
+               uniform vec3  uRimColor;
+               uniform float uRimI;`
             ).replace(
-              '#include <normal_fragment_maps>',
-              `#include <normal_fragment_maps>
+              '#include <opaque_fragment>',
+              `#include <opaque_fragment>
                {
                  vec3 vd = normalize(vViewPosition);
-                 float fres = pow(1.0 - clamp(dot(vd, normalize(normal)), 0.0, 1.0), 2.5);
-                 gRimAccum = uRimColor * fres * uRimI;
+                 float fres = pow(1.0 - clamp(dot(vd, normalize(vNormal)), 0.0, 1.0), 2.5);
+                 gl_FragColor.rgb += uRimColor * (fres * uRimI);
                }`
-            ).replace(
-              '#include <dithering_fragment>',
-              `#include <dithering_fragment>
-               gl_FragColor.rgb += gRimAccum;`
             );
           };
           m.needsUpdate = true;
         });
       });
     }
+
+    /* ── GYARADOS body wave ─────────────────────────────────────────────
+       The old fake vertex-shader body-wave (which displaced `transformed`
+       on a boneless static mesh) has been REMOVED. gyarados_rigged.glb has
+       a real 63-joint skeleton, so it is now driven by a real per-bone
+       travelling wave in tick() (built from userData.gyaChain in the
+       loader) — the SAME technique rayquaza uses. Nothing to install here. */
 
     /* ── post-processing: bloom + ACES tone mapping ───────────────── */
     // Use the default composer targets and bump samples on them — this
@@ -1635,18 +1648,11 @@
     // load time so it occupies GRENINJA_TARGET_SIZE world units (matching
     // Rayquaza's visual footprint in front of the camera); these offsets
     // then nudge it into the same pocket between the "pk" letters.
-    const GRENINJA_TARGET_SIZE = 19;   // longest bbox dimension, world units.
-                                       // gyarados is pulled toward camera (see
-                                       // Z_OFFSET) to clear the heavy underwater
-                                       // FogExp2 that swallows anything in
-                                       // rayquaza's z-plane; closer ⇒ bigger on
-                                       // screen, so ~19 reads at rayquaza's
-                                       // footprint (rayquaza ≈21.5 at z≈0).
-    const GRENINJA_Y_OFFSET    = 0;    // centered in the gap
-    const GRENINJA_X_OFFSET    = -1;   // match rayquaza's MODEL_X_OFFSET (-1)
-    const GRENINJA_Z_OFFSET    = 20;   // pull toward camera (+z) so the serpent
-                                       // sits IN FRONT of the underwater fog and
-                                       // actually reads (in-plane it vanishes).
+    const GRENINJA_TARGET_SIZE = 17.10; // user-chosen size (locked in)
+    const GRENINJA_Y_OFFSET    = 0.10;  // user-chosen pose
+    const GRENINJA_X_OFFSET    = -1.80; // user-chosen pose
+    const GRENINJA_Z_OFFSET    = 8.90;  // user-chosen pose
+                                       // (in-plane at z≈0 it vanishes into haze).
     const GRENINJA_CLIP        = null; // gyarados is a static rigid mesh — no baked clips
 
     // dispose helper — frees geometries + materials (+ their textures) for
@@ -1777,13 +1783,23 @@
     function loadGreninja() {
       return new Promise((resolve, reject) => {
         if (greninjaModel) { resolve(greninjaModel); return; }
-        new GLTFLoader().load('pokemon/gyarados.glb',
+        new GLTFLoader().load('pokemon/gyarados_rigged.glb',
           (gltf) => {
             const g = gltf.scene;
 
-            // gyarados is a Sketchfab static mesh exported Z-up; rotate so the
-            // serpent lies horizontal/upright across the frame like rayquaza.
-            g.rotation.x = -Math.PI / 2;
+            // rigged gyarados GLB — pose: a dramatic HEAD-UP REARING serpent
+            // at a 3/4 hero angle, coiling up through the "pk" letters (per
+            // the user's reference). The model's long axis is local Z; we
+            // rear it vertical (head up), then add a slight yaw + tilt so it
+            // reads as a three-quarter view rising toward the viewer.
+            //   • rotation.x = -PI/2  → stand the body vertical, HEAD UP
+            //   • rotation.y          → yaw for the 3/4 turn
+            //   • rotation.z          → ROLL about the body's long axis (local
+            //     Z, applied first in XYZ Euler order) — +PI rolls the BLUE
+            //     dorsal side + face to the camera (was showing cream belly),
+            //     plus a small tilt off pure-vertical.
+            // Captured as baseRotX/Y/Z so the idle group-sway adds onto it.
+            g.rotation.set(3.141, 2.681, 3.141);   // user-chosen pose (locked in)
 
             // auto-fit: scale so the longest bbox dimension == target size.
             g.updateMatrixWorld(true);
@@ -1792,6 +1808,10 @@
             const maxDim = Math.max(size.x, size.y, size.z) || 1;
             const s = GRENINJA_TARGET_SIZE / maxDim;
             g.scale.setScalar(s);
+            // scale-per-target-size-unit, so the pose tuner's size slider can
+            // map a desired world size → scalar without re-fitting the bbox.
+            g.userData.unitScale  = s / GRENINJA_TARGET_SIZE;
+            g.userData.tunerSize  = GRENINJA_TARGET_SIZE;
 
             // recompute box after scaling, then translate so its center
             // sits at the world origin used for framing, plus offsets.
@@ -1804,35 +1824,79 @@
             g.userData.basePos = g.position.clone();   // baseline for idle drift
 
             // material tweak — same env lift treatment as Rayquaza so it
-            // doesn't crush to black against the dark scene.
+            // doesn't crush to black against the dark scene. The underwater
+            // FogExp2 + cool low-key lighting otherwise swallow the creature
+            // into the haze, so we also lift envMap + add a faint cyan
+            // emissive floor so the serpent reads against the murk.
             g.traverse(o => {
               if (o.isMesh && o.material) {
                 const mats = Array.isArray(o.material) ? o.material : [o.material];
                 mats.forEach(m => {
-                  if ('envMapIntensity' in m) m.envMapIntensity = 1.6;
+                  // CRITICAL: exempt gyarados from the dense underwater
+                  // FogExp2 — at the framed distance the fog was blending the
+                  // whole creature into the water (it WAS on-screen & visible,
+                  // just fully fogged out). Same trick used on the pk glass.
+                  m.fog = false;
+                  if ('envMapIntensity' in m) m.envMapIntensity = 2.4;
+                  if ('emissive' in m && m.emissive) {
+                    // gentle cool self-glow so the serpent lifts off the dark
+                    // water without blowing out (fog no longer eats it).
+                    m.emissive.setHex(0x2a4a55);
+                    if ('emissiveIntensity' in m) m.emissiveIntensity = 0.6;
+                  }
+                  m.needsUpdate = true;
                 });
               }
             });
 
-            // gyarados ships with NO baked clips and NO skeleton, so there is
-            // nothing for an AnimationMixer to drive — leave it null and animate
-            // the whole group procedurally in tick(). Guard the clip lookup so
-            // an empty animations array never throws.
+            // REAL SKELETON — gyarados_rigged.glb has a 63-joint skeleton.
+            // Build a head→tail ordered bone chain (the SAME technique
+            // rayquaza uses) and drive it with a procedural travelling wave
+            // in tick(). No baked clips → no AnimationMixer.
+            //
+            // Bone names are suffixed with an index (e.g. Tail1_04,
+            // Spine1_018, Neck_025, Head_028); match by prefix-regex and
+            // sort Spine/Tail by their numeric segment index. Chain order is
+            // head→tail so wave amplitude can grow from ~0 at the head to
+            // max at the tail tip (Tail9).
+            const gFound = { head: null, neck: [], spine: [], tail: [] };
+            g.traverse(o => {
+              if (!o.isBone) return;
+              const n = o.name;
+              if (/^Head_/.test(n))            gFound.head = o;
+              else if (/^Neck_/.test(n))       gFound.neck.push(o);
+              else if (/^Spine(\d+)_/.test(n)) gFound.spine.push(o);
+              else if (/^Tail(\d+)_/.test(n))  gFound.tail.push(o);
+              // Fin / Whisker / Jaw bones ignored for the body wave
+            });
+            const gByNum = (re) => (a, b) =>
+              parseInt(a.name.match(re)[1], 10) - parseInt(b.name.match(re)[1], 10);
+            gFound.spine.sort(gByNum(/Spine(\d+)/));
+            gFound.tail.sort(gByNum(/Tail(\d+)/));
+            // head end (index 0, least movement) → tail tip (max movement):
+            // Head, Neck, Spine1..Spine5, Tail1..Tail9
+            const gyaChain = [
+              ...(gFound.head ? [gFound.head] : []),
+              ...gFound.neck,
+              ...gFound.spine,
+              ...gFound.tail
+            ];
+            // snapshot rest rotations so the wave is an additive offset
+            gyaChain.forEach(b => {
+              b.userData.rest = { x: b.rotation.x, y: b.rotation.y, z: b.rotation.z };
+            });
+            g.userData.gyaChain = gyaChain;
+
+            // no baked clips on this rig — drive bones procedurally.
             greninjaMixer = null;
             const clips = gltf.animations || [];
-            const clip = (GRENINJA_CLIP && clips.length)
-              ? (THREE.AnimationClip.findByName(clips, GRENINJA_CLIP) || clips[0])
-              : (clips.length ? clips[0] : null);
-            if (clip) {
-              greninjaMixer = new THREE.AnimationMixer(g);
-              const action = greninjaMixer.clipAction(clip);
-              action.setLoop(THREE.LoopRepeat, Infinity);
-              action.play();
-            }
-            log(`gyarados loaded · scale ${s.toFixed(3)} · clip ${clip ? clip.name : 'none (procedural)'} · ${clips.length} clips`);
+            log(`gyarados loaded · scale ${s.toFixed(3)} · bones ${gyaChain.length} (${gyaChain[0] && gyaChain[0].name} → ${gyaChain[gyaChain.length-1] && gyaChain[gyaChain.length-1].name}) · ${clips.length} clips`);
 
-            g.userData.baseRotX = g.rotation.x;   // preserve orientation correction
-            window.__DBG = { g, THREE, camera, scene, get cur(){return currentPokemon;} }; // TEMP-DEBUG
+            // preserve the full rearing orientation so the idle group-sway
+            // adds on top of it (not clobbers it).
+            g.userData.baseRotX = g.rotation.x;
+            g.userData.baseRotY = g.rotation.y;
+            g.userData.baseRotZ = g.rotation.z;
             greninjaModel = g;
             resolve(g);
           },
@@ -1857,10 +1921,17 @@
           if (pokeName) pokeName.textContent = greninjaModel ? 'gyarados' : 'loading…';
           await loadGreninja();
           if (model) scene.remove(model);            // pull rayquaza out
+          // fold the framing offsets into basePos ONCE so basePos is the true
+          // resting center (the pose tuner edits basePos directly; the tick
+          // idle-sway adds onto it without re-applying the offsets). Guarded
+          // so re-showing doesn't accumulate the offset each toggle.
+          if (!greninjaModel.userData.baseFramed) {
+            greninjaModel.userData.basePos.x += GRENINJA_X_OFFSET;
+            greninjaModel.userData.basePos.y += GRENINJA_Y_OFFSET;
+            greninjaModel.userData.basePos.z += GRENINJA_Z_OFFSET;
+            greninjaModel.userData.baseFramed = true;
+          }
           greninjaModel.position.copy(greninjaModel.userData.basePos);
-          greninjaModel.position.x += GRENINJA_X_OFFSET;
-          greninjaModel.position.y += GRENINJA_Y_OFFSET;
-          greninjaModel.position.z += GRENINJA_Z_OFFSET;
           scene.add(greninjaModel);
           installGreninjaRim(greninjaModel);          // cyan fresnel aura
           currentPokemon = 'greninja';
@@ -1921,6 +1992,10 @@
       const action = e.data && e.data.__heroAction;
       if (action === 'pause' || action === 'throttle' || action === 'resume') {
         renderMode = action;
+      } else if (action === 'switchPokemon') {
+        // parent's switch button (the iframe's own toggle is hidden when
+        // embedded) → flip rayquaza ↔ gyarados.
+        try { switchPokemon(); } catch (err) {}
       }
     });
 
@@ -2059,35 +2134,71 @@
       }
       window.__lastT = t;
 
-      // GYARADOS — a static rigid mesh (no skeleton, no clips), so the WHOLE
-      // group is animated procedurally. Gyarados is a giant Chinese-dragon /
-      // sea-serpent: the motion is deliberately SLOW, HEAVY and MENACING (low
-      // frequency, generous amplitude — a big, powerful body, not a darting
-      // fish). It evokes serpentine swimming with whole-group cues:
-      //   • buoyancy BOB (slow vertical float)
-      //   • slow gliding X/Z drift (cruising through the water)
-      //   • a slow continuous YAW survey — it weaves side to side like it's
-      //     hunting, head leading
-      //   • COILING ROLL on z (the body winding through the current)
-      //   • a slow REARING PITCH on x (rising/sinking, head rears up)
-      // A subtle music-reactive boost (amp 0..1) lets it rear/sway a touch more
-      // on the beat. Runs ONLY while shown; driven by `t` (framerate-indep) and
-      // additive on basePos / baseRotX (the orientation correction).
+      // GYARADOS — a RIGGED sea-serpent. Its real skeleton (head→tail chain
+      // in userData.gyaChain) is driven with a Rayquaza-style PER-BONE
+      // travelling wave, so the body undulates for real (no fake vertex-
+      // shader displacement). Gyarados is huge + menacing: SLOW frequency,
+      // LONG wavelength (~1.25 waves → a single smooth S along the body),
+      // generous amplitude that grows toward the tail tip. A subtle vertical
+      // weave (.x) + roll (.z) at offset phases adds 3D life; a gentle
+      // whole-group bob/sway underneath gives buoyancy. Music level (amp)
+      // lifts the swim a touch on the beat. Framerate-independent (clock t).
       if (currentPokemon === 'greninja' && greninjaModel) {
-        if (greninjaMixer) greninjaMixer.update(mixDt);
+        const chain = greninjaModel.userData.gyaChain;
+        if (chain && chain.length) {
+          const N      = chain.length;
+          const omega  = 0.95;                 // slow, heavy phase speed
+          // ~0.9 waves along the body → ONE long, open S that extends out
+          // (fewer waves = the body stretches into a flowing curve instead of
+          // bunching into a tight hunched coil).
+          const k      = (0.9 * 2 * Math.PI) / Math.max(1, N - 1);
+          const react  = 1 + amp * 0.35;       // gentle beat boost
+          const breathe = 0.8 + Math.sin(t * 0.22) * 0.2;
+          // Rayquaza-style BASE+TIP envelope: the WHOLE body undulates (the
+          // head/neck get a real baseline amplitude, not ~0) and it grows
+          // toward the tail. Combined with a MULTI-HARMONIC wave (below) this
+          // flows snakelike and extends out instead of bunching into a hump.
+          const yBase  = 0.15, yTip = 0.40;    // lateral (yaw) — head moves too
+          const xBase  = 0.05, xTip = 0.15;    // secondary vertical weave
+          const zBase  = 0.03, zTip = 0.11;    // body roll
+          for (let i = 0; i < N; i++) {
+            const b = chain[i];
+            if (!b || !b.userData.rest) continue;
+            const u    = i / Math.max(1, N - 1);
+            // smoothstep growth (not linear) → the bend is distributed evenly
+            // down the body instead of kinking at the neck/upper-spine (the
+            // hump). uShaped eases 0→1, so neighbouring bones differ gently.
+            const uShaped = u * u * (3 - 2 * u);
+            const ay   = (yBase + (yTip - yBase) * uShaped) * breathe * react;
+            const ax   = (xBase + (xTip - xBase) * uShaped) * breathe;
+            const az   = (zBase + (zTip - zBase) * uShaped) * breathe;
+            const ph   = omega * t - k * i;
+            // primary travelling wave + a slow half-harmonic + a tiny fast
+            // ripple (same recipe as Rayquaza) — three sines sum to an organic,
+            // fluid undulation rather than a stiff mechanical single bend.
+            const wave =
+              Math.sin(ph)                               * 0.85 +
+              Math.sin(omega * 0.45 * t - k * 0.55 * i + 1.2) * 0.30 +
+              Math.sin(omega * 1.9  * t - k * 1.30 * i + 0.7) * 0.10;
+            b.rotation.y = b.userData.rest.y + wave * ay;
+            b.rotation.x = b.userData.rest.x + Math.sin(ph + Math.PI / 2) * ax;
+            b.rotation.z = b.userData.rest.z + Math.sin(omega * 0.6 * t - k * 0.7 * i) * az;
+          }
+        }
+        // whole-group buoyancy bob/sway UNDER the bone wave
         const b = greninjaModel.userData.basePos;
         if (b) {
-          const react = 1 + amp * 0.5;                         // beat lift
-          // translation — slow, weighty cruise + buoyancy
-          greninjaModel.position.y = b.y + GRENINJA_Y_OFFSET + Math.sin(t * 0.26)        * 0.55 * react;
-          greninjaModel.position.x = b.x + GRENINJA_X_OFFSET + Math.sin(t * 0.15 + 0.5)  * 0.65;
-          greninjaModel.position.z = b.z + GRENINJA_Z_OFFSET + Math.sin(t * 0.13 + 1.2)  * 0.50;
+          const react = 1 + amp * 0.5;
+          greninjaModel.position.y = b.y + Math.sin(t * 0.26)       * 0.45 * react;
+          greninjaModel.position.x = b.x + Math.sin(t * 0.15 + 0.5) * 0.45;
+          greninjaModel.position.z = b.z + Math.sin(t * 0.13 + 1.2) * 0.35;
           const baseRotX = greninjaModel.userData.baseRotX || 0;
-          // rotation — coiling roll + slow hunting yaw + rearing pitch
-          greninjaModel.rotation.z =           Math.sin(t * 0.19)        * 0.13 * react;  // coil/wind
-          greninjaModel.rotation.y =           Math.sin(t * 0.11)        * 0.22            // wide menacing survey
-                                             + Math.sin(t * 0.045)       * 0.30;           // slow drifting hunt
-          greninjaModel.rotation.x = baseRotX + Math.sin(t * 0.16 + 0.6) * 0.10 * react;   // rear up / sink
+          const baseRotY = greninjaModel.userData.baseRotY || 0;
+          const baseRotZ = greninjaModel.userData.baseRotZ || 0;
+          // additive idle sway on top of the rearing 3/4 base pose
+          greninjaModel.rotation.z = baseRotZ + Math.sin(t * 0.12)       * 0.05;            // slow coil
+          greninjaModel.rotation.y = baseRotY + Math.sin(t * 0.045)      * 0.12;            // slow hunting survey
+          greninjaModel.rotation.x = baseRotX + Math.sin(t * 0.16 + 0.6) * 0.05 * react;   // gentle rear
         }
       }
 
