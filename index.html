@@ -3129,11 +3129,25 @@
     let audioCtx = null, analyser = null, gainNode = null, bytes = null;
     let ready = false, started = false;
     let volume = 0.25;          // 0..1
+    // On iOS/Safari, createMediaElementSource() reroutes the <audio> element's
+    // output exclusively through the Web Audio graph — and if that context
+    // doesn't fully run (a well-known iOS quirk) the result is TOTAL SILENCE,
+    // even after a tap. So on touch we do NOT build that graph: the <audio>
+    // element plays directly through its own output (reliable), volume is set
+    // on the element, and the hero gets a synthetic amplitude pulse instead of
+    // analyser data. Desktop keeps the full analyser graph for the visualizer.
+    const AUDIO_TOUCH = window.matchMedia('(hover: none), (pointer: coarse)').matches;
 
     // Build the Web Audio graph. Must be created/resumed inside a user
     // gesture on iOS, so we call this from the unlock handler.
     function buildGraph() {
       if (ready) return;
+      if (AUDIO_TOUCH) {
+        // no Web Audio graph on touch — element plays directly + own volume.
+        audio.volume = volume;
+        ready = true;
+        return;
+      }
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const src = audioCtx.createMediaElementSource(audio);
       analyser  = audioCtx.createAnalyser();
@@ -3260,11 +3274,22 @@
     function pumpAmp() {
       requestAnimationFrame(pumpAmp);
       if (!ready) return;
-      analyser.getByteFrequencyData(bytes);
-      const N = Math.floor(bytes.length * 0.66);
-      let s = 0; for (let i = 0; i < N; i++) s += bytes[i];
+      let amp;
+      if (analyser) {
+        analyser.getByteFrequencyData(bytes);
+        const N = Math.floor(bytes.length * 0.66);
+        let s = 0; for (let i = 0; i < N; i++) s += bytes[i];
+        amp = s / (N * 255);
+      } else {
+        // touch: no analyser — feed a gentle synthetic pulse while playing so
+        // the hero's audio-reactive effects still breathe (no real FFT data).
+        amp = (!audio.paused)
+          ? (0.18 + 0.12 * Math.sin(performance.now() * 0.004)) * volume * 4
+          : 0;
+        amp = Math.max(0, Math.min(1, amp));
+      }
       if (frame && frame.contentWindow) {
-        try { frame.contentWindow.__heroAmp = s / (N * 255); } catch (e) {}
+        try { frame.contentWindow.__heroAmp = amp; } catch (e) {}
       }
       drawWave();
     }
