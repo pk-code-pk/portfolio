@@ -231,25 +231,7 @@
       min-height: 100svh;
       overflow: hidden;
       background: #000;
-      isolation: isolate;
     }
-    .hero-3d .hero-poster {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      object-position: center;
-      display: block;
-      z-index: 0;
-      opacity: 1;
-      transition: opacity 700ms var(--ease-out);
-      will-change: opacity;
-      filter: saturate(1.04) contrast(1.03);
-      transform: scale(1.02);
-      pointer-events: none;
-    }
-    .hero-3d.is-ready .hero-poster { opacity: 0; }
     .hero-3d .hero-frame {
       position: absolute;
       inset: 0;
@@ -265,22 +247,6 @@
          doesn't tear down + re-promote it (a source of the resume hitch). */
       transform: translateZ(0);
       backface-visibility: hidden;
-      z-index: 1;
-      opacity: 0;
-      transition: opacity 700ms var(--ease-out);
-    }
-    .hero-3d::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      z-index: 2;
-      pointer-events: none;
-      background:
-        linear-gradient(180deg, rgba(0,0,0,0.12) 0%, rgba(0,0,0,0.58) 100%),
-        radial-gradient(ellipse at center, transparent 32%, rgba(0,0,0,0.45) 100%);
-    }
-    .hero-3d.is-ready .hero-frame {
-      opacity: 1;
     }
 
     /* ─── music player (lives in PARENT so iOS gesture unlock + scroll
@@ -1746,17 +1712,9 @@
 <!-- ── hero ── -->
 <!-- NEW HERO: 3D rayquaza + pk scene embedded as an iframe.
      Keeps the scene as one source of truth (rayquaza-flying-clean.html);
-     all refinements happen in that file and flow here on reload. A poster
-     image sits underneath so the section looks alive while the iframe boots. -->
+     all refinements happen in that file and flow here on reload.
+     To revert: comment out this section and uncomment the OLD HERO below. -->
 <section class="hero hero-3d">
-  <img
-    class="hero-poster"
-    src="hero-bg-norred.jpg"
-    alt=""
-    aria-hidden="true"
-    loading="eager"
-    fetchpriority="high"
-    decoding="async">
   <iframe
     id="hero-frame"
     src="rayquaza-flying-clean.html"
@@ -2022,11 +1980,7 @@
   const jpFill    = document.getElementById('pre-jp-fill');
   const staticTurb = document.getElementById('static-turb');
   const heroTurb   = document.getElementById('hero-turb');
-  const heroShell  = document.querySelector('.hero-3d');
   let started = false;
-  let heroReady = window.__heroReady === true;   // may already be set
-
-  if (heroReady && heroShell) heroShell.classList.add('is-ready');
 
   // animate the noise seed so it shifts like real static
   let staticRAF;
@@ -2069,18 +2023,18 @@
     }
   }
 
-  // The preloader dismisses once the intro animation has played. The 3D
-  // hero loads in parallel behind a poster image, so slow phones don't sit
-  // on a blank loading screen while the iframe fetches and initializes.
+  // The preloader now dismisses only once BOTH the intro animation has
+  // played AND the 3D hero has signalled it's ready (model loaded + first
+  // frame rendered) — so slow phones don't reveal a blank, still-loading
+  // hero. A safety timeout guarantees it never hangs if the hero never
+  // signals (WebGL failure, etc.).
   let introDone = false;
-  function maybeStart() { if (introDone) startSite(); }
+  let heroReady = window.__heroReady === true;   // may already be set
+  function maybeStart() { if (introDone && heroReady) startSite(); }
 
   // hero → parent readiness handshake
   window.addEventListener('message', (e) => {
-    if (e.data && e.data.__heroReady) {
-      heroReady = true;
-      if (heroShell) heroShell.classList.add('is-ready');
-    }
+    if (e.data && e.data.__heroReady) { heroReady = true; maybeStart(); }
   });
 
   setTimeout(() => {
@@ -2093,9 +2047,10 @@
   }, 400);
 
   // safety net: never hold the preloader longer than this even if the hero
-  // never finishes the intro (bad font / timer issues). 8s keeps a slow phone
-  // from staring at "loading" indefinitely.
-  setTimeout(() => { introDone = true; startSite(); }, 8000);
+  // never reports ready (WebGL failure / slow phone). 8s keeps a slow phone
+  // from staring at "loading" indefinitely while still giving the hero a fair
+  // chance to signal first.
+  setTimeout(() => { introDone = true; heroReady = true; startSite(); }, 8000);
 
   /* ─── Splitting.js ─── */
   // Rewrite the hero title for narrow viewports BEFORE Splitting runs.
