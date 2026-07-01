@@ -126,9 +126,7 @@
   <canvas id="c"></canvas>
   <div id="status">loading…</div>
   <div id="err"></div>
-  <!-- keep the music source out of the DOM until standalone mode needs it;
-       the embedded hero is silent and should not prefetch the 4.6MB track. -->
-  <audio id="bg-audio" data-src="music/bg-music.mp3" loop preload="none"></audio>
+  <audio id="bg-audio" src="music/bg-music.mp3" loop preload="auto"></audio>
 
   <!-- music player: play toggle + elastic volume slider -->
   <div id="music-player">
@@ -651,7 +649,6 @@
        scene still has sound + reactivity. */
     const EMBEDDED = (window.self !== window.top);
     const audioEl = document.getElementById('bg-audio');
-    const audioSrc = audioEl?.dataset?.src || 'music/bg-music.mp3';
     let audioCtx = null, analyser = null, audioBytes = null;
     let gainNode = null;
     let audioReady = false;
@@ -659,9 +656,6 @@
     function initAudio() {
       if (audioReady) return;
       try {
-        if (!audioEl.src) {
-          audioEl.src = audioSrc;
-        }
         audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
         const src = audioCtx.createMediaElementSource(audioEl);
         analyser  = audioCtx.createAnalyser();
@@ -687,13 +681,9 @@
     if (EMBEDDED) {
       // parent runs the show — hide our player, stay silent.
       audioEl.muted = true;
-      audioEl.preload = 'none';
       const p = document.getElementById('music-player');
       if (p) p.style.display = 'none';
     } else {
-      audioEl.src = audioSrc;
-      audioEl.preload = 'auto';
-      audioEl.load();
       audioEl.volume = 1.0;
       tryPlay();
       const kickAudio = () => { tryPlay(); window.removeEventListener('pointerdown', kickAudio); window.removeEventListener('keydown', kickAudio); };
@@ -2599,17 +2589,21 @@
           const bodyArr = ud.gyaBody;
           const NB = bodyArr.length;
 
-          // seed the transported up at the HEAD: this frame, carry the head's
-          // up from the PREVIOUS frame (temporal continuity) and transport it
-          // forward through the rest of the chain. That keeps the front of the
-          // serpent actively tracking the figure-8 instead of staying baked.
-          for (let i = 0; i < NB; i++) {
+          // seed the transported up: this frame, carry the head's up from the
+          // PREVIOUS frame (temporal continuity) re-orthogonalized against the
+          // head tangent; first time, start from world +Y.
+          // NOTE: start at i=1 — the HEAD (i=0) is NOT aimed from the trail
+          // anymore; it's a rigid continuation of the neck (see Pass B). This
+          // removes the head's noisy self-aim + roll-flip (the spazz).
+          for (let i = 1; i < NB; i++) {
             const b = bodyArr[i];
             const child = b.userData.gyaBodyChild;
-            // body-child arc: the NEXT body bone (tail-ward). For the HEAD we
-            // use the next body bone in order (one short step tail-ward) so the
-            // front bone points into the neck instead of freezing at its baked
-            // rest pose.
+            // body-child arc: the NEXT body bone (tail-ward). For the HEAD (and
+            // any bone whose body-child is a leaf End-bone with no gyaCumArc)
+            // we must NOT fall back to gyaTailEndArc — that aims the bone at the
+            // far TAIL point (head detach/mis-aim bug). Instead use the next
+            // bone in body order (one short step tail-ward) so the head's
+            // forward tangent is the true local body direction.
             let childArc;
             if (child && typeof child.userData.gyaCumArc === 'number') {
               childArc = child.userData.gyaCumArc;
@@ -2639,8 +2633,8 @@
             _gDir.normalize();
 
             // ── rotation-minimizing up ──
-            if (i === 0) {
-              // first processed (head) bone: seed from last frame's carried up
+            if (i === 1) {
+              // first processed (neck) bone: seed from last frame's carried up
               // (temporal continuity), else world +Y
               _gUp.copy(_gHeadUp.lengthSq() > 1e-6 ? _gHeadUp : _gWorldUp);
             }
@@ -2652,7 +2646,7 @@
               if (_gUp.lengthSq() < 1e-4) _gUp.set(1, 0, 0).addScaledVector(_gDir, -_gDir.x);
             }
             _gUp.normalize();
-            if (i === 0) _gHeadUp.copy(_gUp);        // store for next frame (temporal seed)
+            if (i === 1) _gHeadUp.copy(_gUp);        // store for next frame (temporal seed)
 
             // build the target WORLD quaternion from (forward, up):
             //  1) aim restForward→tangent (minimal),
@@ -2673,10 +2667,11 @@
             b.userData.gyaWQ.copy(_gTgtW);
           }
 
-          // ── NECK / HEAD softening (optional, gentle) ───────────────────
-          // The neck blends a little toward the spine so the front reads as
-          // one piece. The head stays in the same live solve, but gets a
-          // slightly tighter damping factor so it follows the neck cleanly.
+          // ── NECK softening (optional, gentle) ───────────────────────────
+          // The neck blends a little toward the spine so the front reads as one
+          // piece. The HEAD is NOT touched here anymore — it's a rigid
+          // continuation of the neck applied in Pass B (no self-aim, no
+          // rate-limit, no roll-flip). Framerate-independent in Pass B.
           if (NB >= 3 && HEAD_TUNE.neckGlue > 0) {
             bodyArr[1].userData.gyaWQ.slerp(bodyArr[2].userData.gyaWQ, HEAD_TUNE.neckGlue * 0.5);
           }
@@ -2684,8 +2679,10 @@
           // Pass B — apply, parents before children. Framerate-independent
           // exponential damping (1 - e^(-k·dt)) replaces the old fixed-factor
           // slerps + rate-limiter (those were framerate-dependent and stacked).
-          // The head stays in the same live solve, but uses a slightly tighter
-          // damping factor so it tracks the front of the body without wobbling.
+          // The HEAD is handled specially: it is set to the neck's CURRENT world
+          // orientation × the fixed rest offset (captured at load), so it is
+          // rigidly the neck's front tip — the single change that removes the
+          // jitter/snap/roll-flip by construction.
           const proc = ud.gyaProc;
           const warming = _gWarmFrames > 0;
           // double-cover guard helper (nearer hemisphere before slerp)
@@ -2693,6 +2690,16 @@
           for (let i = 0; i < proc.length; i++) {
             const b = proc[i];
             if (!b) continue;
+
+            if (b.userData.gyaIsHead) {
+              // HEAD = DO NOTHING. The posed angle was baked into its rest local
+              // rotation at load, so it's rigidly bolted to the neck and pure FK
+              // carries it through every curve — naturally, like a real skeleton.
+              // No per-frame recompute → nothing can "switch" at the curves.
+              // If these calibration values change, the rest local is re-baked
+              // once by the calibration hook.
+              continue;
+            }
 
             if (!b.userData.gyaWQ) continue;
             b.parent.getWorldQuaternion(_gPQ);
@@ -2703,7 +2710,7 @@
             // The NECK is the head's parent, so any neck jitter shows up in the
             // head → damp the neck EXTRA smooth (low k) to kill head jitter at
             // the source. Body stays responsive.
-            const k = warming ? 1000 : (b.userData.gyaIsHead ? 14 * HEAD_TUNE.headGlue : (b.userData.gyaIsNeck ? 6 : 10));
+            const k = warming ? 1000 : (b.userData.gyaIsNeck ? 6 : 10);
             const a = warming ? 1 : (1 - Math.exp(-k * dt));
             b.quaternion.slerp(_gTgt, a);
             b.updateWorldMatrix(false, false);       // refresh for the child
