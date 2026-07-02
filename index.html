@@ -1717,7 +1717,7 @@
 <section class="hero hero-3d">
   <iframe
     id="hero-frame"
-    src="rayquaza-flying-clean.html"
+    src="rayquaza-flying-clean.html?v=8"
     class="hero-frame"
     title="praneel · 3d hero"
     allow="autoplay; fullscreen"
@@ -3107,6 +3107,37 @@
       current = other();
       if (nameEl) nameEl.textContent = other();
     });
+  })();
+
+  /* ─── forward hero clicks/taps into the 3D iframe ─────────────────────
+     The iframe is pointer-events:none (so the page scrolls freely and iOS
+     can unlock audio here), which means it NEVER receives a pointer itself.
+     The parent captures the gesture, converts it to normalized device coords
+     relative to the iframe's rect, and hands them over — the scene raycasts
+     against Rayquaza and, on a hit, launches its flight circuit. */
+  (function () {
+    const frame = document.getElementById('hero-frame');
+    if (!frame) return;
+    const forward = (clientX, clientY, target) => {
+      // don't hijack clicks on real controls sitting over the hero
+      if (target && target.closest &&
+          target.closest('button, a, input, select, label, #music-player')) return;
+      const r = frame.getBoundingClientRect();
+      if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) return;
+      const coords = {
+        x:  ((clientX - r.left) / r.width)  * 2 - 1,
+        y: -(((clientY - r.top)  / r.height) * 2 - 1),
+      };
+      // ONE path only (never both, or the scene toggles twice per click):
+      // same-origin → set directly; if that's blocked (cross-origin) → postMessage.
+      if (!frame.contentWindow) return;
+      try { frame.contentWindow.__heroClick = coords; }
+      catch (e) { frame.contentWindow.postMessage({ __heroClick: coords }, '*'); }
+    };
+    window.addEventListener('click', (e) => forward(e.clientX, e.clientY, e.target));
+    window.addEventListener('touchstart', (e) => {
+      if (e.touches && e.touches[0]) forward(e.touches[0].clientX, e.touches[0].clientY, e.target);
+    }, { passive: true });
   })();
 
   /* ─── parent-owned audio engine + music player ────────────────────

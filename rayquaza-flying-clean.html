@@ -4,6 +4,9 @@
   <meta charset="utf-8" />
   <title>rayquaza · flying (clean)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
@@ -332,6 +335,13 @@
     // debug output goes to the console now; the on-screen corner element
     // is a permanent aesthetic label instead.
     const log = (m) => { console.log('[hero]', m); };
+
+    // TEMP flight debug overlay — remove once flight is confirmed working.
+    const _rqDbg = document.createElement('div');
+    _rqDbg.style.cssText = 'position:fixed;left:8px;top:8px;z-index:99999;font:11px monospace;'
+      + 'color:#0f8;background:rgba(0,0,0,.6);padding:4px 6px;border-radius:4px;white-space:pre;pointer-events:none;';
+    _rqDbg.textContent = 'flight: idle';
+    document.body.appendChild(_rqDbg);
     status.innerHTML =
       '<img class="st-logo" src="harvard-logo.png" alt="" />' +
       '<span class="st-text"><span class="st-main">harvard cs</span>' +
@@ -363,6 +373,10 @@
     // hit, play the cry (via the parent's unlocked audio) + flare the jaw.
     const raycaster = new THREE.Raycaster();
     let cryT = -10;   // timestamp of last cry, for the screech reaction
+    // ── Rayquaza loop-mode (click → orbits the letters) ─────────────────
+    let rqLooping   = false;  // click to toggle flight
+    let rqLoopStart = 0;      // t when loop mode was activated
+    let rqLoopStop  = -999;   // t when loop mode was deactivated
 
     // easing helpers for the ballistic screech (see cry block in tick)
     const clamp01 = x => Math.min(1, Math.max(0, x));
@@ -1646,7 +1660,7 @@
     // load time so it occupies GRENINJA_TARGET_SIZE world units (matching
     // Rayquaza's visual footprint in front of the camera); these offsets
     // then nudge it into the same pocket between the "pk" letters.
-    const GRENINJA_TARGET_SIZE = 17.10; // user-chosen size (locked in)
+    const GRENINJA_TARGET_SIZE = 17.0; // user-chosen size (locked in)
     const GRENINJA_Y_OFFSET    = 0.10;  // user-chosen pose
     const GRENINJA_X_OFFSET    = -1.80; // user-chosen pose
     const GRENINJA_Z_OFFSET    = 8.90;  // user-chosen pose
@@ -1760,6 +1774,156 @@
         });
 
         log(`loaded · chain ${bodyChain.length} (head→tail) · arms ${arms.L.length+arms.R.length} · jaw ${jaw?'y':'n'}`);
+
+        // ══ FLIGHT TRAIL-RIG CALIBRATION ═══════════════════════════════
+        // Rayquaza's skeleton is a Y-junction (Waist → {Hips→Tail…} and
+        // Waist → Spine1→Spine2→Neck1→Neck2→Head), topologically identical
+        // to the gyarados rig. On click we drive the body head→tail along a
+        // 3D flight curve so the WHOLE SERPENT flows through the path — head
+        // leads into turns, spine follows the arc, tail trails the track.
+        // This block pre-computes, per driven bone: its rest-forward axis
+        // (toward its body-child), rest world quaternion, a parallel-
+        // transported dorsal "up", and cumulative body-arc — everything the
+        // per-frame aim needs. All state lives on model.userData.rqf.
+        try {
+          let rqWaist = null, rqHips = null;
+          model.traverse(o => {
+            if (!o.isBone) return;
+            if (/^Waist/.test(o.name) && !rqWaist) rqWaist = o;
+            if (/^Hips/.test(o.name)  && !rqHips)  rqHips  = o;
+          });
+          const neckRev  = found.neck.slice().reverse();   // [Neck2(head-side), Neck1]
+          const spineRev = found.spine.slice().reverse();   // [Spine2(head-side), Spine1]
+          // driven body order head→tail. Head is EXCLUDED (rides the neck via
+          // pure FK, held at its rest-local so it never jitters). Hips is the
+          // Y-seam that drives the tail base.
+          const driven = [
+            ...neckRev, ...spineRev,
+            ...(rqHips ? [rqHips] : []),
+            ...found.tail
+          ].filter(Boolean);
+          const drivenSet = new Set(driven);
+
+          // processing order = hierarchy parent-before-child (traversal order),
+          // so each bone reads its parent's fresh world matrix in Pass B.
+          const proc = [];
+          model.traverse(o => { if (o.isBone && drivenSet.has(o)) proc.push(o); });
+
+          // calibrate in the model's IDENTITY rotation frame (runtime blends
+          // model.rotation → 0 in flight, so the dorsal reference must be
+          // measured there). Save + restore the loaded rotation.
+          const rqSavedRot = model.rotation.clone();
+          model.rotation.set(0, 0, 0);
+          model.updateMatrixWorld(true);
+
+          const tmpV = new THREE.Vector3();
+          driven.forEach(b => {
+            let bodyChild = b.children.find(c => c.isBone && drivenSet.has(c));
+            if (!bodyChild) {
+              bodyChild = b.children.find(c => c.isBone && /^Head/.test(c.name))
+                       || b.children.find(c => c.isBone && !/^Jaw/.test(c.name))
+                       || b.children.find(c => c.isBone);
+            }
+            tmpV.copy(bodyChild ? bodyChild.position : new THREE.Vector3(1,0,0)).normalize();
+            b.userData.rqRestFwd      = tmpV.clone();
+            b.userData.rqBodyChild    = bodyChild || null;
+            b.userData.rqRestWorldQ   = b.getWorldQuaternion(new THREE.Quaternion());
+            b.userData.rqRestFwdWorld = b.userData.rqRestFwd.clone()
+                                          .applyQuaternion(b.userData.rqRestWorldQ).normalize();
+            b.userData.rqWQ           = new THREE.Quaternion();   // per-frame aim target (world)
+            b.userData.rqCurWQ        = new THREE.Quaternion();   // temporally-smoothed world quat
+          });
+
+          // continuous dorsal surface by parallel transport head→tail (seed +Y),
+          // so head/neck/spine/tail all roll the same face up → no belly-flip.
+          {
+            const carry = new THREE.Vector3(0, 1, 0);
+            for (let i = 0; i < driven.length; i++) {
+              const fw = driven[i].userData.rqRestFwdWorld;
+              carry.addScaledVector(fw, -carry.dot(fw));
+              if (carry.lengthSq() < 1e-5) {
+                carry.set(0, 1, 0).addScaledVector(fw, -fw.y);
+                if (carry.lengthSq() < 1e-5) carry.set(0, 0, 1).addScaledVector(fw, -fw.z);
+              }
+              carry.normalize();
+              driven[i].userData.rqRestUpWorld = carry.clone();
+            }
+          }
+
+          // cumulative body-arc (world distance between successive driven-bone
+          // heads at rest). Also the tail-end so the last bone has a forward.
+          const wp = driven.map(b => new THREE.Vector3().setFromMatrixPosition(b.matrixWorld));
+          const cum = [0];
+          for (let i = 1; i < driven.length; i++) cum[i] = cum[i-1] + wp[i].distanceTo(wp[i-1]);
+          driven.forEach((b, i) => { b.userData.rqCumArc = cum[i]; });
+          const tailLeaf = driven[driven.length - 1];
+          const tailEndBone = tailLeaf.userData.rqBodyChild;
+          let rqTailEndArc = cum[cum.length - 1];
+          if (tailEndBone) {
+            const tp = new THREE.Vector3().setFromMatrixPosition(tailEndBone.matrixWorld);
+            rqTailEndArc += tp.distanceTo(wp[wp.length - 1]);
+          } else {
+            rqTailEndArc += 0.5;
+          }
+          const rqBodyArc = rqTailEndArc;
+          // junction (Waist) body-arc = arc of the front spine leaf (Spine1),
+          // the seam bone. Anchor the model each frame so Waist lands there.
+          const rqSpine1 = found.spine[0];  // Spine1
+          const rqJunctionArc = (rqSpine1 && typeof rqSpine1.userData.rqCumArc === 'number')
+                              ? rqSpine1.userData.rqCumArc : rqBodyArc * 0.4;
+
+          // bake the HEAD rest-local so it rides the neck rigidly in flight.
+          if (found.head) {
+            found.head.userData.rqRestLocal = found.head.quaternion.clone();
+          }
+
+          // ── build the FLIGHT CURVE — a distinct 3D orbit around the letters
+          // (NOT a figure-8): a single non-self-crossing ring in screen-XY that
+          // also dives in front of / climbs behind the text (Z weave) and rolls
+          // its height (Y harmonic) so it reads as a dragon banking through the
+          // air. Sized so curveLength ≈ 2.2× bodyArc → body fills ~45% of the
+          // loop: head clearly LEADS, tail clearly TRAILS on the same track.
+          const baseShape = (th) => new THREE.Vector3(
+            Math.cos(th) * 1.35,                                   // wide X orbit
+            0.60 * Math.sin(th) + 0.16 * Math.sin(2*th + 0.5),     // ellipse + teardrop
+            0.55 * Math.sin(th + 1.1) + 0.20 * Math.sin(3*th)      // depth weave, 3 gentle lobes
+          );
+          const SHN = 260;
+          // measure base length
+          let baseLen = 0; let prev = baseShape(0);
+          for (let i = 1; i <= SHN; i++) {
+            const p = baseShape((i / SHN) * Math.PI * 2);
+            baseLen += p.distanceTo(prev); prev = p;
+          }
+          const scaleS = (2.2 * rqBodyArc) / baseLen;
+          const flightPts = [];
+          for (let i = 0; i < SHN; i++) {
+            flightPts.push(baseShape((i / SHN) * Math.PI * 2).multiplyScalar(scaleS));
+          }
+          const flightCurve = new THREE.CatmullRomCurve3(flightPts, true, 'catmullrom', 0.1);
+          flightCurve.arcLengthDivisions = 1200;
+          flightCurve.updateArcLengths();
+          const rqCurveLen = flightCurve.getLength();
+
+          model.rotation.copy(rqSavedRot);
+          model.updateMatrixWorld(true);
+
+          // save rest-local quaternion for every driven bone so non-bodyChain
+          // bones (e.g. Hips) can be restored to a consistent base on landing
+          driven.forEach(b => { b.userData.rqRestLocalQ = b.quaternion.clone(); });
+          const rqBodyChainSet = new Set(bodyChain);
+
+          model.userData.rqf = {
+            driven, proc, waist: rqWaist,
+            bodyArc: rqBodyArc, tailEndArc: rqTailEndArc,
+            junctionArc: rqJunctionArc,
+            curve: flightCurve, curveLen: rqCurveLen,
+            bodyChainSet: rqBodyChainSet,
+          };
+          log(`flight rig · driven ${driven.length} · bodyArc ${rqBodyArc.toFixed(1)} · curveLen ${rqCurveLen.toFixed(1)} (×${(rqCurveLen/rqBodyArc).toFixed(2)}) · junctionArc ${rqJunctionArc.toFixed(1)}`);
+        } catch (e) {
+          log('flight rig build failed: ' + e.message);
+        }
 
         // warm up: compile all materials + run one full composer pass so
         // every shader (incl. bloom's render-target programs) is linked
@@ -1911,10 +2075,11 @@
             // tail base bends with the spine: one continuous serpent.
             let gHips = null;
             g.traverse(o => { if (o.isBone && /^Hips/.test(o.name) && !gHips) gHips = o; });
-            // body order head→tail (spine reversed: Spine5 is head-side):
+            // body order head→tail (spine reversed: Spine5 is head-side).
+            // Head is intentionally EXCLUDED — it follows the neck via pure FK
+            // in the model's native GLB orientation. No procedural override.
             const spineRev = gFound.spine.slice().reverse();
             const gyaBody = [
-              ...(gFound.head ? [gFound.head] : []),
               ...gFound.neck,
               ...spineRev,
               ...(gHips ? [gHips] : []),   // Y-junction seam (drives the tail base)
@@ -2054,6 +2219,7 @@
                 window.__gyaReBakeHead = reBake;          // calibration hook
                 headB.userData.gyaIsHead = true;
                 if (gyaBody[1]) gyaBody[1].userData.gyaIsNeck = true;
+                if (gyaBody[2]) gyaBody[2].userData.gyaIsNeck = true;
               }
             }
 
@@ -2079,23 +2245,19 @@
             // occupies only ~45% of the loop at a time → the head clearly LEADS
             // around a large, readable ∞ and the tail TRAILS behind on the same
             // track (instead of the body filling/coiling the whole tight 8).
-            const GYA8_A = 12.0;   // half-width  (X)  — wide lobes, both visible
-            const GYA8_B = 7.0;    // half-height (Y)  — tall enough to read as 8
-            const GYA8_Z = 3.0;    // depth weave (Z)   gentle in/out of the text
+            const GYA8_A = 10.0;   // half-width  (X)  — wide lobes, both visible
+            const GYA8_B = 6.5;    // half-height (Y)  — tall enough to read as 8
+            const GYA8_Z = 2.5;    // depth weave (Z)   gentle in/out of the text
             const fig8Pts = [];
             const FN = 240;
             for (let i = 0; i < FN; i++) {
               const th = (i / FN) * Math.PI * 2;
-              // x = A·sin t  → single span; y = B·sin t·cos t → the two lobes
-              // stacked → a vertical-ish 8. Rotate into a lying-down ∞ by
-              // swapping: lobes side-by-side. Classic horizontal ∞:
-              //   x = A·cos t ,  y = B·sin(2t)/2  (crossover at the middle)
               const x = GYA8_A * Math.cos(th);
               const y = GYA8_B * Math.sin(2 * th) * 0.5;
               const z = GYA8_Z * Math.sin(th);          // one weave per loop
               fig8Pts.push(new THREE.Vector3(x, y, z));
             }
-            const fig8Curve = new THREE.CatmullRomCurve3(fig8Pts, true, 'catmullrom', 0.5);
+            const fig8Curve = new THREE.CatmullRomCurve3(fig8Pts, true, 'catmullrom', 0.1);
             // arc-length LUT
             const LUTN = 1200;
             fig8Curve.arcLengthDivisions = LUTN;
@@ -2110,10 +2272,9 @@
             // processing order.
             const gyaProc = [
               ...gFound.spine,            // Spine1..Spine5 (shallow→deep)
-              ...gFound.neck,            // Neck
-              ...(gFound.head ? [gFound.head] : []),
-              ...(gHips ? [gHips] : []), // Y-junction seam — MUST precede Tail1
-              ...gFound.tail             // Tail1..Tail9 (child of Hips)
+              ...gFound.neck,             // Neck (head follows via FK, not driven)
+              ...(gHips ? [gHips] : []),  // Y-junction seam — MUST precede Tail1
+              ...gFound.tail              // Tail1..Tail9 (child of Hips)
             ];
 
             g.userData.gyaBody       = gyaBody;
@@ -2238,6 +2399,8 @@
     const _gHeadUp  = new THREE.Vector3(0, 1, 0); // head up carried across frames
     const _gCurUp = new THREE.Vector3();  // dorsal after aim
     const _gWantUp= new THREE.Vector3();  // desired (transported) up
+    const _gCentDir = new THREE.Vector3(); // centripetal direction for banking
+    const _gBwdTan  = new THREE.Vector3(); // backward tangent scratch
     // head-damping: previous-frame head target WORLD quat, so we can rate-limit
     // the head's per-frame rotation and never let it snap ~180° (cooked head).
     const _gHeadPrevWQ = new THREE.Quaternion();
@@ -2245,7 +2408,7 @@
     // ── live gyarados head calibration state ──────────────────────────
     // an ADDITIVE local-euler offset applied to the head bone after the path
     // sets it, plus the head/neck glue factors.
-    const HEAD_TUNE = { rx: 1.058, ry: 1.338, rz: 0.748, neckGlue: 0.6, headGlue: 0.95, pause: false };
+    const HEAD_TUNE = { rx: 0, ry: 0, rz: 0, neckGlue: 0.6, headGlue: 0.95, pause: false };
     let _gPausedT = 0;   // frozen clock value captured when pause turns on
     const _gHeadOff = new THREE.Quaternion();   // scratch for the offset
     const _gHeadEul = new THREE.Euler();
@@ -2267,6 +2430,29 @@
     let   _gWarmFrames = 0;                // >0 = snap bones to target (no ease-in)
     const _gHP0 = new THREE.Vector3();     // trail sample (this bone)
     const _gHP1 = new THREE.Vector3();     // trail sample (toward head)
+    const _gTanA = new THREE.Vector3();   // curvature probe tangent A (behind)
+    const _gTanB = new THREE.Vector3();   // curvature probe tangent B (ahead)
+    let   _gSpeedMulS = 1.0;              // temporally-smoothed speedMul (no instant jumps)
+
+    // ── Rayquaza FLIGHT trail-rig state ────────────────────────────────
+    // On click, Rayquaza's whole body conforms to + travels a 3D flight
+    // curve around the letters — same path-follow principle as gyarados
+    // (head leads, spine follows the arc, tail trails the same track) but
+    // analytic (no ring buffer) and BLENDED in/out of the idle pose by
+    // rqBlend. Reuses the _g* scratch temps (gyarados never runs on this
+    // page — currentPokemon is exclusive).
+    let   _rqHeadS  = 0;                    // head arc-distance along the flight curve
+    let   _rqPrevT  = null;                 // for framerate-independent dt
+    let   _rqActive = false;                // was the flight rig running last frame (for priming)
+    let   _rqLastToggle = -999;             // debounce: ignore repeat clicks within 300ms
+    // TEMP click-path diagnostics
+    let   _rqDbgMsg = 0;    // __heroClick received via postMessage
+    let   _rqDbgSelf = 0;   // __heroClick set via own window listener
+    let   _rqDbgConsumed = 0; // click handler consumed a __heroClick
+    let   _rqDbgHits = -1;  // last raycast hit count
+    const _rqHeadUp = new THREE.Vector3(0, 1, 0);  // transported up carried across frames
+    const _rqAnchor = new THREE.Vector3();  // full-flight model.position that lands junction on curve
+    const _rqIdleP  = new THREE.Vector3();  // idle float target position
 
     // (#1) parent posts {__heroAction:'pause'|'throttle'|'resume'}:
     //   pause    → fully off-screen: stop rendering entirely.
@@ -2284,8 +2470,28 @@
         // parent's switch button (the iframe's own toggle is hidden when
         // embedded) → flip rayquaza ↔ gyarados.
         try { switchPokemon(); } catch (err) {}
+      } else if (e.data && e.data.__heroClick) {
+        // parent forwards click coords as NDC (iframe is pointer-events:none
+        // when embedded, so the parent captures the pointer for us).
+        window.__heroClick = e.data.__heroClick;
+        _rqDbgMsg++;
       }
     });
+
+    // when viewed STANDALONE (not embedded) the iframe is NOT pointer-events:
+    // none, so capture our own clicks/taps directly. When embedded these never
+    // fire (events pass through) and the parent forwards coords via postMessage.
+    const _selfHeroClick = (cx, cy) => {
+      window.__heroClick = {
+        x:  (cx / window.innerWidth)  * 2 - 1,
+        y: -((cy / window.innerHeight) * 2 - 1),
+      };
+      _rqDbgSelf++;
+    };
+    window.addEventListener('click', (e) => _selfHeroClick(e.clientX, e.clientY));
+    window.addEventListener('touchstart', (e) => {
+      if (e.touches && e.touches[0]) _selfHeroClick(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
 
     function tick(now) {
       requestAnimationFrame(tick);
@@ -2451,21 +2657,47 @@
           const L        = ud.gyaCurveLen;
           const bodyArc  = ud.gyaBodyArc;
           const react    = 1 + amp * 0.30;
-          // SLOW & heavy: full figure-8 loop every ~13s (a touch faster on the
-          // beat). speed in arc-units/sec = L / period.
-          const PERIOD   = 13.0 / (1 + amp * 0.20);
-          // pause: freeze the figure-8 travel (body holds position) while the
-          // orientation passes keep running, so head sliders update live on the
-          // frozen pose. Driven by the pause flag.
-          if (!HEAD_TUNE.pause) _gSHead += (L / PERIOD) * dt;
+          // Full figure-8 loop every ~8s (a touch faster on the beat).
+          // Speed in arc-units/sec = (L / PERIOD) * speedMul.
+          const PERIOD   = 8.0 / (1 + amp * 0.20);
+
+          // ── curvature-eased travel ──────────────────────────────────────
+          // The Gerono lemniscate has very non-uniform curvature: tight at the
+          // lobe tips (radius ~4), zero at the crossover.  Constant-arc-speed
+          // makes the serpent whip through turns and coast robotically through
+          // the middle — the opposite of how a real swimmer moves.
+          // We probe the path's bend angle over ±1.5 world-units and compute
+          // a multiplier: slow in turns (bend large), fast in straights (bend≈0).
+          // The centering term (+0.5) keeps the average near 1 so loop period
+          // stays ~8s — it's a shape change, not a net speed change.
+          const EASE     = 0.42;           // easing strength (0=off, 1=heavy)
+          const BEND_REF = 0.45;           // radians at lobe tip (calibration)
+          const CURV_DU  = 1.5 / L;        // ±1.5 world-units expressed as arc-fraction
+          const fHead    = ((_gSHead % L) + L) % L / L;
+          // wrap (not clamp) so the probe spans the seam correctly on a closed curve
+          curve.getTangentAt(((fHead - CURV_DU) % 1 + 1) % 1, _gTanA);
+          curve.getTangentAt((fHead + CURV_DU) % 1,            _gTanB);
+          const bend     = Math.acos(Math.max(-1, Math.min(1, _gTanA.dot(_gTanB))));
+          const speedRaw = Math.max(0.75, Math.min(1.25, 1 + EASE * (0.5 - bend / BEND_REF)));
+          // smooth speedMul over ~10 frames so curvature changes can't cause instant speed jumps
+          _gSpeedMulS += (speedRaw - _gSpeedMulS) * (1 - Math.exp(-10 * dt));
+          const speedMul = _gSpeedMulS;
+
+          // pause: freeze figure-8 travel while orientation passes keep running,
+          // so head sliders update live on the frozen pose.
+          if (!HEAD_TUNE.pause) _gSHead += (L / PERIOD) * speedMul * dt;
           if (_gSHead > 1e7) _gSHead -= 1e7;        // guard against unbounded growth
 
           // ── small anguilliform undulation layered on the path ──
           // a travelling lateral wave, amplitude growing head→tail (envelope),
           // perturbs the arc-sample offset sideways so it SWIMS, not snaps.
-          const UND_FREQ = 0.32 * Math.PI * 2;      // ~0.32 Hz, slow/heavy
-          const UND_WAVES = 1.4;                    // ~1.4 visible S-curves
-          const UND_AMP  = 0.28 * react;            // world-unit lateral push
+          const UND_FREQ = 0.35 * Math.PI * 2;      // slower undulation = more fluid
+          const UND_WAVES = 1.5;                    // fewer waves = smoother body
+          const UND_AMP  = 0.24 * react;            // reduced lateral push for less shake
+          // organic "breathing": two slow, incommensurate LFOs drift the swim
+          // amplitude so the gait never repeats perfectly — reads as alive, not
+          // looped. Range ≈ ±22%.
+          const UND_BREATH = 1 + 0.15 * Math.sin(gt * 0.31) + 0.07 * Math.sin(gt * 0.73);
 
           // helper: arc-distance → world point on the curve (arc-length LUT via
           // getPointAt). Writes into the given target vector.
@@ -2589,43 +2821,46 @@
           const bodyArr = ud.gyaBody;
           const NB = bodyArr.length;
 
-          // seed the transported up: this frame, carry the head's up from the
-          // PREVIOUS frame (temporal continuity) re-orthogonalized against the
-          // head tangent; first time, start from world +Y.
-          // NOTE: start at i=1 — the HEAD (i=0) is NOT aimed from the trail
-          // anymore; it's a rigid continuation of the neck (see Pass B). This
-          // removes the head's noisy self-aim + roll-flip (the spazz).
-          for (let i = 1; i < NB; i++) {
+          // Pass A: compute target world quaternion per bone.
+          // HEAD (i=0): no trail history exists ahead of the snout, so we aim
+          // it using the figure-8 curve tangent one bone-length AHEAD of the
+          // current tip. This correctly orients the head in the travel direction.
+          // All other bones use the trail as before.
+          for (let i = 0; i < NB; i++) {
             const b = bodyArr[i];
-            const child = b.userData.gyaBodyChild;
-            // body-child arc: the NEXT body bone (tail-ward). For the HEAD (and
-            // any bone whose body-child is a leaf End-bone with no gyaCumArc)
-            // we must NOT fall back to gyaTailEndArc — that aims the bone at the
-            // far TAIL point (head detach/mis-aim bug). Instead use the next
-            // bone in body order (one short step tail-ward) so the head's
-            // forward tangent is the true local body direction.
-            let childArc;
-            if (child && typeof child.userData.gyaCumArc === 'number') {
-              childArc = child.userData.gyaCumArc;
-            } else if (i + 1 < NB && typeof bodyArr[i+1].userData.gyaCumArc === 'number') {
-              childArc = bodyArr[i+1].userData.gyaCumArc;     // next body bone
+            if (i === 0) {
+              // head: forward = where the serpent is going next on the curve
+              const lookAhead = (bodyArr[1] ? bodyArr[1].userData.gyaCumArc : 0.5) * 3.5;
+              sampleAt(_gSHead + lookAhead, _gT0);
+              _gHP0.set(headWX, headWY, headWZ);
+              _gHP1.set(center.x + _gT0.x, center.y + _gT0.y + bobY, center.z + _gT0.z);
             } else {
-              childArc = ud.gyaTailEndArc;                    // genuine tail leaf
+              const child = b.userData.gyaBodyChild;
+              let childArc;
+              if (child && typeof child.userData.gyaCumArc === 'number') {
+                childArc = child.userData.gyaCumArc;
+              } else if (i + 1 < NB && typeof bodyArr[i+1].userData.gyaCumArc === 'number') {
+                childArc = bodyArr[i+1].userData.gyaCumArc;   // next body bone
+              } else {
+                childArc = ud.gyaTailEndArc;                  // genuine tail leaf
+              }
+              trailAt(b.userData.gyaCumArc, _gHP0);
+              trailAt(childArc,             _gHP1);
             }
-            // this bone sits `cumArc[i]` behind the head; it AIMS toward the
-            // trail point of its body-child (further behind = tail-ward).
-            trailAt(b.userData.gyaCumArc, _gHP0);
-            trailAt(childArc,             _gHP1);
             _gT0.copy(_gHP0);
             _gT1.copy(_gHP1);
 
             // anguilliform wave (grows head→tail) perturbs the child sample so
             // the body swims rather than rigidly snapping to the trail.
             const u   = Math.min(1, b.userData.gyaCumArc / bodyArc);
-            const env = u * u;
+            // small non-zero base (0.12) so the FRONT of the body sways subtly
+            // too — the whole serpent flows instead of the tail doing all the
+            // work — then grows smoothly into the tail whip.
+            const env = 0.12 + u * (1.15 + u);
             const ph  = UND_FREQ * gt - UND_WAVES * Math.PI * 2 * u;
-            _gT1.z += Math.sin(ph) * UND_AMP * env;
-            _gT1.y += Math.cos(ph) * UND_AMP * 0.4 * env;
+            const amp = UND_AMP * UND_BREATH * env;
+            _gT1.z += Math.sin(ph) * amp;
+            _gT1.y += Math.cos(ph) * amp * 0.5;   // richer vertical → 3D, not a flat wag
 
             // tangent toward the body-child sample
             _gDir.copy(_gT1).sub(_gT0);
@@ -2633,9 +2868,8 @@
             _gDir.normalize();
 
             // ── rotation-minimizing up ──
-            if (i === 1) {
-              // first processed (neck) bone: seed from last frame's carried up
-              // (temporal continuity), else world +Y
+            if (i === 0) {
+              // head bone seeds the up frame (temporal continuity from last frame)
               _gUp.copy(_gHeadUp.lengthSq() > 1e-6 ? _gHeadUp : _gWorldUp);
             }
             // parallel transport: remove tangent component, renormalize. If it
@@ -2646,7 +2880,26 @@
               if (_gUp.lengthSq() < 1e-4) _gUp.set(1, 0, 0).addScaledVector(_gDir, -_gDir.x);
             }
             _gUp.normalize();
-            if (i === 1) _gHeadUp.copy(_gUp);        // store for next frame (temporal seed)
+
+            // ── banking: blend up toward centripetal so the body rolls into
+            //    curves like a train on a banked track, not a flat-falling loop.
+            {
+              const backArc = b.userData.gyaCumArc + 2.0;
+              trailAt(backArc, _gBwdTan);
+              // backward tangent = normalize(current_pos - back_pos)
+              _gCentDir.subVectors(_gHP0, _gBwdTan).normalize();
+              // centripetal ≈ fwd_tangent − bwd_tangent (points inside the curve)
+              _gBwdTan.subVectors(_gDir, _gCentDir);
+              const cLen = _gBwdTan.length();
+              if (cLen > 0.02) {
+                _gBwdTan.divideScalar(cLen);
+                _gUp.addScaledVector(_gBwdTan, 0.22);
+                _gUp.addScaledVector(_gDir, -_gUp.dot(_gDir));
+                _gUp.normalize();
+              }
+            }
+
+            if (i === 0) _gHeadUp.copy(_gUp);        // store for next frame (temporal seed)
 
             // build the target WORLD quaternion from (forward, up):
             //  1) aim restForward→tangent (minimal),
@@ -2668,12 +2921,9 @@
           }
 
           // ── NECK softening (optional, gentle) ───────────────────────────
-          // The neck blends a little toward the spine so the front reads as one
-          // piece. The HEAD is NOT touched here anymore — it's a rigid
-          // continuation of the neck applied in Pass B (no self-aim, no
-          // rate-limit, no roll-flip). Framerate-independent in Pass B.
-          if (NB >= 3 && HEAD_TUNE.neckGlue > 0) {
-            bodyArr[1].userData.gyaWQ.slerp(bodyArr[2].userData.gyaWQ, HEAD_TUNE.neckGlue * 0.5);
+          // Blends neck slightly toward spine so the front reads as one piece.
+          if (NB >= 2 && HEAD_TUNE.neckGlue > 0) {
+            bodyArr[0].userData.gyaWQ.slerp(bodyArr[1].userData.gyaWQ, HEAD_TUNE.neckGlue * 0.5);
           }
 
           // Pass B — apply, parents before children. Framerate-independent
@@ -2691,16 +2941,6 @@
             const b = proc[i];
             if (!b) continue;
 
-            if (b.userData.gyaIsHead) {
-              // HEAD = DO NOTHING. The posed angle was baked into its rest local
-              // rotation at load, so it's rigidly bolted to the neck and pure FK
-              // carries it through every curve — naturally, like a real skeleton.
-              // No per-frame recompute → nothing can "switch" at the curves.
-              // If these calibration values change, the rest local is re-baked
-              // once by the calibration hook.
-              continue;
-            }
-
             if (!b.userData.gyaWQ) continue;
             b.parent.getWorldQuaternion(_gPQ);
             _gPQi.copy(_gPQ).invert();
@@ -2710,7 +2950,7 @@
             // The NECK is the head's parent, so any neck jitter shows up in the
             // head → damp the neck EXTRA smooth (low k) to kill head jitter at
             // the source. Body stays responsive.
-            const k = warming ? 1000 : (b.userData.gyaIsNeck ? 6 : 10);
+            const k = warming ? 1000 : (b.userData.gyaIsHead ? 10 * HEAD_TUNE.headGlue : (b.userData.gyaIsNeck ? 2.5 : 4.5));
             const a = warming ? 1 : (1 - Math.exp(-k * dt));
             b.quaternion.slerp(_gTgt, a);
             b.updateWorldMatrix(false, false);       // refresh for the child
@@ -2721,16 +2961,40 @@
 
       if (currentPokemon === 'rayquaza' && model) {
         // handle a forwarded click: raycast against the model; on a hit,
-        // play the cry through the parent + kick the jaw-flare reaction.
+        // toggle FLIGHT MODE — Rayquaza launches into a path-following flight
+        // circuit around the letters (see the trail rig below).
         if (window.__heroClick) {
           const c = window.__heroClick; window.__heroClick = null;
           raycaster.setFromCamera({ x: c.x, y: c.y }, camera);
           const hits = raycaster.intersectObject(model, true);
-          if (hits.length) {
-            cryT = t;
-            try { window.parent && window.parent.__playCry && window.parent.__playCry(); } catch (e) {}
+          if (hits.length && t - _rqLastToggle > 0.5) {
+            _rqLastToggle = t;
+            rqLooping = !rqLooping;
+            if (rqLooping) { rqLoopStart = t; }
+            else           { rqLoopStop  = t; }
           }
         }
+
+        // ── flight blend + head-travel advance (needed by idle scaling,
+        //    arm flap, and the trail rig below) ──────────────────────────
+        const rqDt = (_rqPrevT == null) ? 0.016 : Math.min(0.05, t - _rqPrevT);
+        _rqPrevT = t;
+        const BLEND_IN  = 1.5;   // seconds to reach full flight
+        const BLEND_OUT = 1.2;   // seconds to return to idle
+        const _rqBlendin  = rqLooping  ? Math.min(1, (t - rqLoopStart) / BLEND_IN)  : 0;
+        const _rqBlendout = !rqLooping ? Math.max(0, 1 - (t - rqLoopStop) / BLEND_OUT) : 0;
+        const _rqRaw   = Math.max(_rqBlendin, _rqBlendout);
+        // quintic ease (Perlin) — smoother S-curve than smoothstep
+        const rqBlend  = _rqRaw * _rqRaw * _rqRaw * (_rqRaw * (_rqRaw * 6 - 15) + 10);
+        const _rqf     = model.userData.rqf;
+        // head advances at rqBlend×speed: takeoff accelerates from 0, landing decelerates to 0
+        if (_rqf && rqBlend > 0.001) {
+          const RQ_PERIOD = 9.0;
+          _rqHeadS += (_rqf.curveLen / RQ_PERIOD) * rqDt * rqBlend;
+          if (_rqHeadS > 1e7) _rqHeadS -= 1e7;
+        }
+        _rqDbg.textContent =
+          `v3 ${rqLooping?'FLY':'idle'} blend:${rqBlend.toFixed(2)} headS:${_rqHeadS.toFixed(1)}`;
 
         /* full-body traveling wave + layered motion. wave travels
            head→tail (-k*i), amplitude grows toward the tip. Two
@@ -2775,6 +3039,9 @@
         // idle undulation gives way to the convulsion (don't fully kill it)
         const idleScale = 1 - 0.6 * spasm;
 
+        // idle body wave (the flight trail rig below blends OVER this pose
+        // by slerping toward world-space path targets — so at rqBlend=0 this
+        // idle pose is what shows, at rqBlend=1 the flight rig fully drives).
         for (let i = 0; i < N; i++) {
           const b = bodyChain[i];
           if (!b || !b.userData.rest) continue;
@@ -2788,7 +3055,6 @@
             Math.sin(omega * 1.9 * t - k * 1.3 * i + 0.7)   * 0.12;  // small fast ripple
           b.rotation.y = b.userData.rest.y + wave * amp * idleScale;
           b.rotation.x = b.userData.rest.x + Math.sin(omega * t - k * i + Math.PI/2) * axp * 0.7 * idleScale;
-          // z roll along the chain too — subtle, makes the tail flick read 3D
           b.rotation.z = b.userData.rest.z + Math.sin(omega * 0.6 * t - k * 0.7 * i) * amp * 0.35 * idleScale;
 
           /* ── AGONY WRITHE — violent, chaotic convulsion over the whole
@@ -2829,14 +3095,16 @@
         // tilts, applied across the first three bones with falloff so
         // the head leads, neck2 follows, neck1 trails. fixes the
         // stiff-neck look against the wagging tail.
+        // suppressed during flight so dYaw (path direction) dominates
+        const _surveyAmp = 1 - rqBlend * 0.75;
         for (let i = 0; i < 3; i++) {
           const b = bodyChain[i];
           if (!b || !b.userData.rest) continue;
           const falloff = i === 0 ? 1.0 : (i === 1 ? 0.7 : 0.45);
           b.rotation.y += (Math.sin(t * 0.42 + i * 0.4) * 0.20 +
-                           Math.sin(t * 0.18 + 1.1 + i * 0.3) * 0.10) * falloff;
-          b.rotation.x +=  Math.sin(t * 0.31 + 1 + i * 0.25) * 0.09 * falloff;
-          b.rotation.z +=  Math.sin(t * 0.24 + 0.5 + i * 0.2) * 0.06 * falloff;
+                           Math.sin(t * 0.18 + 1.1 + i * 0.3) * 0.10) * falloff * _surveyAmp;
+          b.rotation.x +=  Math.sin(t * 0.31 + 1 + i * 0.25) * 0.09 * falloff * _surveyAmp;
+          b.rotation.z +=  Math.sin(t * 0.24 + 0.5 + i * 0.2) * 0.06 * falloff * _surveyAmp;
         }
 
         // independent SPINE sway — tightened. Only the two true spine
@@ -2859,10 +3127,10 @@
           jaw.rotation.x = jaw.userData.rest.x + breath + snap;
         }
 
-        // arms — bigger wing-like sway, opposite phase + a Y rotation
-        // so they don't just flap straight up/down
-        const armSway = Math.sin(t * 1.05) * 0.16;
-        const armYaw  = Math.sin(t * 0.7)  * 0.10;
+        // arms — wing-like sway; amplitude grows in flight but frequency stays
+        // constant so the phase never jumps during blend-in/out transitions.
+        const armSway = Math.sin(t * 1.05) * (0.16 + rqBlend * 0.34);
+        const armYaw  = Math.sin(t * 0.7)  * 0.10 - rqBlend * 0.22;
         arms.L.forEach((b, i) => {
           b.rotation.z = b.userData.rest.z + armSway * (1 + i*0.3);
           b.rotation.y = b.userData.rest.y + armYaw  * (1 + i*0.2);
@@ -2872,17 +3140,167 @@
           b.rotation.y = b.userData.rest.y - armYaw  * (1 + i*0.2);
         });
 
-        // whole-body motion — kept tighter so the body stays anchored
-        // between the letters and doesn't drift far from the "in
-        // between p and k" silhouette. rotations carry most of the
-        // life now; translations are gentle accents.
+        // whole-body motion ────────────────────────────────────────────
         const MODEL_X_OFFSET = -1;
-        model.position.y =                 Math.sin(t * 0.32)        * 0.45;
-        model.position.x = MODEL_X_OFFSET + Math.sin(t * 0.21 + 0.5) * 0.55;
-        model.position.z =                  Math.sin(t * 0.18 + 1.2) * 0.45;
-        model.rotation.z = Math.sin(t * 0.24) * 0.10;
-        model.rotation.y = Math.sin(t * 0.17) * 0.07;
-        model.rotation.x = Math.sin(t * 0.20 + 0.6) * 0.05;
+        const idlePX = MODEL_X_OFFSET + Math.sin(t * 0.21 + 0.5) * 0.55;
+        const idlePY =                  Math.sin(t * 0.32)        * 0.45;
+        const idlePZ =                  Math.sin(t * 0.18 + 1.2)  * 0.45;
+        const idleRX = Math.sin(t * 0.20 + 0.6) * 0.05;
+        const idleRY = Math.sin(t * 0.17) * 0.07;
+        const idleRZ = Math.sin(t * 0.24) * 0.10;
+
+        const rqf = model.userData.rqf;
+        if (rqf && rqBlend > 0.001) {
+          // ══ FLIGHT TRAIL RIG — the whole body conforms to + travels the 3D
+          //    flight curve. Head leads, spine follows the arc, tail trails the
+          //    same track. Blended OVER the idle pose set above by rqBlend. ══
+          const curve = rqf.curve, L = rqf.curveLen, bodyArc = rqf.bodyArc;
+          // arc-distance → world point on the flight curve (centred on the text)
+          const sampleAt = (s, out) => {
+            let frac = (s % L) / L; if (frac < 0) frac += 1;
+            curve.getPointAt(frac, out);
+            out.x += modelCenter.x; out.y += modelCenter.y; out.z += modelCenter.z;
+            return out;
+          };
+
+          // 1) ANCHOR: place the model so the Waist junction lands on its curve
+          //    sample (junctionArc behind the head). model.rotation → 0 at full
+          //    flight so the bones' WORLD quaternions render true. Both position
+          //    and rotation lerp from the idle float by rqBlend (smooth takeoff).
+          model.rotation.set(idleRX * (1 - rqBlend), idleRY * (1 - rqBlend), idleRZ * (1 - rqBlend));
+          sampleAt(_rqHeadS - rqf.junctionArc, _gSamp);       // desired Waist world
+          _rqAnchor.copy(_gSamp);
+          model.position.copy(_rqAnchor);
+          model.updateMatrixWorld(true);
+          if (rqf.waist) {
+            _gJW.setFromMatrixPosition(rqf.waist.matrixWorld);
+            _rqAnchor.add(_gSamp).sub(_gJW);                  // correct so Waist == sample
+          }
+          _rqIdleP.set(idlePX, idlePY, idlePZ);
+          model.position.lerpVectors(_rqIdleP, _rqAnchor, rqBlend);
+          model.updateMatrixWorld(true);
+
+          // 2) PASS A — build a target WORLD quaternion per driven bone using a
+          //    rotation-minimizing frame (forward = trail tangent, up carried
+          //    smoothly head→tail so it never flips), plus a light anguilliform
+          //    swim + banking into the turns.
+          const driven = rqf.driven, NB = driven.length;
+          const UND_AMP = bodyArc * 0.020;
+          const UND_FREQ = 0.5 * Math.PI * 2, UND_WAVES = 1.4;
+          for (let i = 0; i < NB; i++) {
+            const b = driven[i];
+            if (i === 0) {
+              const ahead = (driven[1] ? driven[1].userData.rqCumArc : bodyArc * 0.05) * 2.5 + 0.5;
+              sampleAt(_rqHeadS,         _gHP0);
+              sampleAt(_rqHeadS + ahead, _gHP1);
+            } else {
+              const child = b.userData.rqBodyChild;
+              let childArc;
+              if (child && typeof child.userData.rqCumArc === 'number') childArc = child.userData.rqCumArc;
+              else if (i + 1 < NB) childArc = driven[i+1].userData.rqCumArc;
+              else childArc = rqf.tailEndArc;
+              sampleAt(_rqHeadS - b.userData.rqCumArc, _gHP0);
+              sampleAt(_rqHeadS - childArc,            _gHP1);
+            }
+            _gT0.copy(_gHP0); _gT1.copy(_gHP1);
+            // anguilliform swim, amplitude grows head→tail
+            const u   = Math.min(1, b.userData.rqCumArc / bodyArc);
+            const env = 0.12 + u * (1.15 + u);
+            const ph  = UND_FREQ * t - UND_WAVES * Math.PI * 2 * u;
+            _gT1.z += Math.sin(ph) * UND_AMP * env;
+            _gT1.y += Math.cos(ph) * UND_AMP * env * 0.5;
+
+            _gDir.copy(_gT1).sub(_gT0);
+            if (_gDir.lengthSq() < 1e-9) { b.userData.rqWQ.copy(b.userData.rqRestWorldQ); continue; }
+            _gDir.normalize();
+
+            if (i === 0) _gUp.copy(_rqHeadUp.lengthSq() > 1e-6 ? _rqHeadUp : _gWorldUp);
+            _gUp.addScaledVector(_gDir, -_gUp.dot(_gDir));
+            if (_gUp.lengthSq() < 1e-4) {
+              _gUp.copy(_gWorldUp).addScaledVector(_gDir, -_gWorldUp.dot(_gDir));
+              if (_gUp.lengthSq() < 1e-4) _gUp.set(1,0,0).addScaledVector(_gDir, -_gDir.x);
+            }
+            _gUp.normalize();
+            // banking: blend up toward centripetal so it rolls into turns
+            {
+              sampleAt(_rqHeadS - (b.userData.rqCumArc + bodyArc * 0.05), _gBwdTan);
+              _gCentDir.subVectors(_gHP0, _gBwdTan).normalize();
+              _gBwdTan.subVectors(_gDir, _gCentDir);
+              const cLen = _gBwdTan.length();
+              if (cLen > 0.02) {
+                _gBwdTan.divideScalar(cLen);
+                _gUp.addScaledVector(_gBwdTan, 0.40);
+                _gUp.addScaledVector(_gDir, -_gUp.dot(_gDir));
+                _gUp.normalize();
+              }
+            }
+            if (i === 0) _rqHeadUp.copy(_gUp);
+
+            _gDelta.setFromUnitVectors(b.userData.rqRestFwdWorld, _gDir);
+            _gTgtW.copy(_gDelta).multiply(b.userData.rqRestWorldQ);
+            _gCurUp.copy(b.userData.rqRestUpWorld).applyQuaternion(_gDelta);
+            _gCurUp.addScaledVector(_gDir, -_gCurUp.dot(_gDir));
+            _gWantUp.copy(_gUp).addScaledVector(_gDir, -_gUp.dot(_gDir));
+            if (_gCurUp.lengthSq() > 1e-6 && _gWantUp.lengthSq() > 1e-6) {
+              _gCurUp.normalize(); _gWantUp.normalize();
+              _gRoll.setFromUnitVectors(_gCurUp, _gWantUp);
+              _gTgtW.premultiply(_gRoll);
+            }
+            b.userData.rqWQ.copy(_gTgtW);
+          }
+
+          // 3) PASS B — temporally SMOOTH, then apply parents-before-children.
+          //    rqCurWQ eases toward the fresh aim target with framerate-indep
+          //    damping (1-e^{-k·dt}) — this kills the frame-to-frame jitter that
+          //    otherwise reads as a "spazz". On takeoff rqCurWQ is primed to the
+          //    current idle world pose so the launch is smooth. The final bone
+          //    local crossfades idle → smoothed-flight by rqBlend (clean in/out).
+          const proc = rqf.proc;
+          const aSmooth = 1 - Math.exp(-7.0 * rqDt);
+          if (!_rqActive) {
+            // just launched — seed the smoothed pose from the live idle world pose
+            for (let i = 0; i < proc.length; i++) {
+              proc[i].getWorldQuaternion(proc[i].userData.rqCurWQ);
+            }
+          }
+          const bcsSet = rqf.bodyChainSet;
+          for (let i = 0; i < proc.length; i++) {
+            const b = proc[i];
+            if (!b.userData.rqWQ) continue;
+            // ease the smoothed world quat toward the fresh target (shortest arc)
+            if (b.userData.rqCurWQ.dot(b.userData.rqWQ) < 0) {
+              const q = b.userData.rqWQ; q.set(-q.x, -q.y, -q.z, -q.w);
+            }
+            b.userData.rqCurWQ.slerp(b.userData.rqWQ, aSmooth);
+            // convert to local under the (blended) parent, crossfade from idle
+            b.parent.getWorldQuaternion(_gPQ);
+            _gPQi.copy(_gPQ).invert();
+            _gTgt.copy(_gPQi).multiply(b.userData.rqCurWQ);
+            if (b.quaternion.dot(_gTgt) < 0) _gTgt.set(-_gTgt.x, -_gTgt.y, -_gTgt.z, -_gTgt.w);
+            // bones NOT in the idle wave (e.g. Hips) have no per-frame reset,
+            // so restore their saved rest-local as the blend base so they
+            // always return to the same pose on landing.
+            if (!bcsSet.has(b) && b.userData.rqRestLocalQ) {
+              b.quaternion.copy(b.userData.rqRestLocalQ);
+            }
+            b.quaternion.slerp(_gTgt, rqBlend);
+            b.updateWorldMatrix(false, false);
+          }
+          _rqActive = true;
+          // HEAD rides the neck rigidly in flight: blend toward its baked rest-local.
+          const rqHead = bodyChain[0];
+          if (rqHead && rqHead.userData.rqRestLocal) {
+            _gTgt.copy(rqHead.userData.rqRestLocal);
+            if (rqHead.quaternion.dot(_gTgt) < 0) _gTgt.set(-_gTgt.x, -_gTgt.y, -_gTgt.z, -_gTgt.w);
+            rqHead.quaternion.slerp(_gTgt, rqBlend);
+            rqHead.updateWorldMatrix(false, false);
+          }
+        } else {
+          // idle float (no flight)
+          model.position.set(idlePX, idlePY, idlePZ);
+          model.rotation.set(idleRX, idleRY, idleRZ);
+          _rqActive = false;   // next takeoff re-primes the smoothed pose
+        }
 
         /* ── BALLISTIC SCREECH ──────────────────────────────────────
            One deliberate, sustained roar (not a vibration), additive on
