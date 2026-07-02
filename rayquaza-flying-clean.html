@@ -336,12 +336,6 @@
     // is a permanent aesthetic label instead.
     const log = (m) => { console.log('[hero]', m); };
 
-    // TEMP flight debug overlay — remove once flight is confirmed working.
-    const _rqDbg = document.createElement('div');
-    _rqDbg.style.cssText = 'position:fixed;left:8px;top:8px;z-index:99999;font:11px monospace;'
-      + 'color:#0f8;background:rgba(0,0,0,.6);padding:4px 6px;border-radius:4px;white-space:pre;pointer-events:none;';
-    _rqDbg.textContent = 'flight: idle';
-    document.body.appendChild(_rqDbg);
     status.innerHTML =
       '<img class="st-logo" src="harvard-logo.png" alt="" />' +
       '<span class="st-text"><span class="st-main">harvard cs</span>' +
@@ -355,7 +349,11 @@
     const DPR_CAP = 2;   // restored: mobile was capped at 1 during the underwater
                          // rework which halved hero resolution on phones (blurry).
                          // 2 matches the original sharp version on all devices.
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    // antialias:false — EffectComposer renders to its own MSAA render targets;
+    // the renderer's native AA applies only to the default framebuffer which
+    // the composer never uses. MSAA on composer.renderTarget1/2 handles AA.
+    // powerPreference hints OS to use discrete GPU on dual-GPU machines.
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -1250,7 +1248,9 @@
     // MSAA: 4x desktop, 2x touch. (Full DPR=2 now does most of the AA work
     // on mobile; a light 2x cleans remaining edges without the heavy 4x-on-
     // HDR cost that chokes weaker mobile GPUs.)
-    const MSAA = TOUCH_DEVICE ? 2 : 4;
+    // 2x MSAA on desktop: at DPR=2 each logical pixel maps to 4 physical pixels
+    // (natural SSAA), so 2x MSAA = 8x effective AA — clean edges, half the cost of 4x.
+    const MSAA = TOUCH_DEVICE ? 1 : 2;
     composer.renderTarget1.samples = MSAA;
     composer.renderTarget2.samples = MSAA;
     composer.renderTarget1.texture.type = THREE.HalfFloatType;
@@ -1259,8 +1259,10 @@
     // (resolution, strength, radius, threshold) — high threshold so
     // only the bright env-driven highlights bloom; starfield + glass
     // stay clean.
+    // half-res bloom: UnrealBloom is inherently blurry so half-res is visually
+    // identical to full-res at this threshold. Saves ~75% of bloom GPU work.
     const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth, window.innerHeight),  // full-res — quality
+      new THREE.Vector2(window.innerWidth >> 1, window.innerHeight >> 1),
       0.55,   // strength
       0.40,   // radius
       1.05    // threshold (only HDR-ish brights pass)
@@ -2373,7 +2375,7 @@
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
       composer.setSize(window.innerWidth, window.innerHeight);
-      bloomPass.setSize(window.innerWidth, window.innerHeight);   // full-res
+      bloomPass.setSize(window.innerWidth >> 1, window.innerHeight >> 1); // half-res
       rainPass.uniforms.iResolution.value.set(window.innerWidth, window.innerHeight);
     });
 
@@ -2445,11 +2447,6 @@
     let   _rqPrevT  = null;                 // for framerate-independent dt
     let   _rqActive = false;                // was the flight rig running last frame (for priming)
     let   _rqLastToggle = -999;             // debounce: ignore repeat clicks within 300ms
-    // TEMP click-path diagnostics
-    let   _rqDbgMsg = 0;    // __heroClick received via postMessage
-    let   _rqDbgSelf = 0;   // __heroClick set via own window listener
-    let   _rqDbgConsumed = 0; // click handler consumed a __heroClick
-    let   _rqDbgHits = -1;  // last raycast hit count
     const _rqHeadUp = new THREE.Vector3(0, 1, 0);  // transported up carried across frames
     const _rqAnchor = new THREE.Vector3();  // full-flight model.position that lands junction on curve
     const _rqIdleP  = new THREE.Vector3();  // idle float target position
@@ -2474,7 +2471,6 @@
         // parent forwards click coords as NDC (iframe is pointer-events:none
         // when embedded, so the parent captures the pointer for us).
         window.__heroClick = e.data.__heroClick;
-        _rqDbgMsg++;
       }
     });
 
@@ -2486,7 +2482,6 @@
         x:  (cx / window.innerWidth)  * 2 - 1,
         y: -((cy / window.innerHeight) * 2 - 1),
       };
-      _rqDbgSelf++;
     };
     window.addEventListener('click', (e) => _selfHeroClick(e.clientX, e.clientY));
     window.addEventListener('touchstart', (e) => {
@@ -2993,9 +2988,6 @@
           _rqHeadS += (_rqf.curveLen / RQ_PERIOD) * rqDt * rqBlend;
           if (_rqHeadS > 1e7) _rqHeadS -= 1e7;
         }
-        _rqDbg.textContent =
-          `v3 ${rqLooping?'FLY':'idle'} blend:${rqBlend.toFixed(2)} headS:${_rqHeadS.toFixed(1)}`;
-
         /* full-body traveling wave + layered motion. wave travels
            head→tail (-k*i), amplitude grows toward the tip. Two
            harmonics overlaid for organic feel. Lateral (Y) is the main
@@ -3467,8 +3459,11 @@
       // audio-reactive camera FOV breath — tiny zoom-in on bass hits
       {
         const targetFov = 38 - amp * 0.6;
-        camera.fov += (targetFov - camera.fov) * 0.10;
-        camera.updateProjectionMatrix();
+        const newFov = camera.fov + (targetFov - camera.fov) * 0.10;
+        if (Math.abs(newFov - camera.fov) > 0.005) {
+          camera.fov = newFov;
+          camera.updateProjectionMatrix();
+        }
       }
 
       composer.render();

@@ -1717,7 +1717,7 @@
 <section class="hero hero-3d">
   <iframe
     id="hero-frame"
-    src="rayquaza-flying-clean.html?v=8"
+    src="rayquaza-flying-clean.html?v=9"
     class="hero-frame"
     title="praneel · 3d hero"
     allow="autoplay; fullscreen"
@@ -1982,10 +1982,13 @@
   const heroTurb   = document.getElementById('hero-turb');
   let started = false;
 
-  // animate the noise seed so it shifts like real static
+  // animate the noise seed at ~20fps instead of 60fps — visually identical static, 3x cheaper
   let staticRAF;
+  let _staticFrame = 0;
   function flickerStatic() {
-    staticTurb.setAttribute('seed', Math.floor(Math.random() * 999));
+    if ((_staticFrame++ % 3) === 0) {
+      staticTurb.setAttribute('seed', Math.floor(Math.random() * 999));
+    }
     staticRAF = requestAnimationFrame(flickerStatic);
   }
   flickerStatic();
