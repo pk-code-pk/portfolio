@@ -359,6 +359,13 @@
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping      = THREE.NoToneMapping;
     renderer.toneMappingExposure = 1.0;
+    // the pk glass uses transmission:1.0, which makes three.js render the
+    // WHOLE scene into an offscreen buffer every frame (at full res by
+    // default) just to sample refraction through it. That extra full-scene
+    // pass is the single biggest hidden cost in this file — dropping its
+    // resolution to a quarter is invisible (it's just soft background blur
+    // behind the letters) but removes most of the GPU cost.
+    renderer.transmissionResolutionScale = 0.25;
 
     /* ── scene ─────────────────────────────────────────────────────── */
     const scene  = new THREE.Scene();
@@ -716,103 +723,36 @@
       }
     };
 
-    /* ── lightning bolts (electric arcs that strike around Rayquaza) ──
-       Pool of reusable Line objects with fractal-subdivided jagged
-       paths. Additive blend + bloom turns thin lines into glowing
-       strikes. Fires randomly with extra weight on audio amplitude
-       peaks. The fragment is geometry-only — visual thickness comes
-       from bloom. */
-    const LIGHTNING_POOL = 5;
-    const BOLT_VERTS     = 128;          // upper bound on subdivided points
-    const lightningSlots = [];
-    for (let i = 0; i < LIGHTNING_POOL; i++) {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(BOLT_VERTS * 3), 3));
-      const mat = new THREE.LineBasicMaterial({
-        // brighter near-white core so bloom picks it up hard
-        color: 0xeaf3ff,
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
-      });
-      const line = new THREE.Line(geo, mat);
-      line.frustumCulled = false;
-      line.visible = false;
-      scene.add(line);
-      lightningSlots.push({ line, geo, mat, life: 0, maxLife: 0.32 });
-    }
-
-    const _tmpV  = new THREE.Vector3();
-    const _tmpV2 = new THREE.Vector3();
-    function generateBolt(start, end, displacement, subdivisions, outArr) {
-      // recursive midpoint displacement — each iteration halves the
-      // displacement so high-frequency jitter is small
-      let points = [start.clone(), end.clone()];
-      for (let iter = 0; iter < subdivisions; iter++) {
-        const next = [points[0]];
-        for (let i = 0; i < points.length - 1; i++) {
-          const a = points[i], b = points[i+1];
-          const mid = _tmpV.lerpVectors(a, b, 0.5).clone();
-          // perpendicular offset in the camera-facing plane
-          const dir  = _tmpV2.subVectors(b, a).normalize();
-          const perp = new THREE.Vector3(-dir.y, dir.x, dir.z * 0.3).normalize();
-          mid.addScaledVector(perp, (Math.random() - 0.5) * displacement);
-          next.push(mid, b);
-        }
-        points = next;
-        displacement *= 0.55;
-      }
-      const cap = Math.min(points.length, outArr.length / 3);
-      for (let i = 0; i < cap; i++) {
-        outArr[i*3+0] = points[i].x;
-        outArr[i*3+1] = points[i].y;
-        outArr[i*3+2] = points[i].z;
-      }
-      return cap;
-    }
-
-    // shared charge state — set to 1.0 on each strike, decayed in tick
-    const glassCharge = { v: 0 };
+    /* ── lightning (procedural bolt traced across the pk glass) ────────
+       Previously: separate world-space Line objects flying through the
+       sky toward the letters, plus a flat emissive "flash" on the glass.
+       Replaced with a single technique matching the wet-glass droplets on
+       the gyarados/greninja screen — the bolt is generated IN the pk
+       letter fragment shader (installLightningBolt below), in the same
+       object-space UV as the droplets, using the reactbits.dev Lightning
+       background's fbm domain-warp technique (a straight line warped by
+       fractal noise reads as a jagged bolt; brightness ~ 1/distance from
+       that warped line). `charge` spikes on each strike and decays fast —
+       the shader reads it as uBoltCharge and only draws the bolt while
+       nonzero, so it's tied to the SAME letters the water droplets crawl
+       down, not a separate object in world space. */
+    const glassCharge = { v: 0 };          // energizes iridescence/clearcoat (unchanged)
+    const pkBolt = { uCharge: { value: 0 }, uSeed: { value: 0 } };
 
     function fireLightning() {
-      const slot = lightningSlots.find(s => s.life <= 0);
-      if (!slot) return;
-      // start: somewhere overhead, end: ON the pk text bounding box
-      const target = pkText ? pkText.position : modelCenter;
-      const ang = Math.random() * Math.PI * 2;
-      const radius = 22 + Math.random() * 22;
-      const start = new THREE.Vector3(
-        target.x + Math.cos(ang) * radius,
-        target.y + 22 + Math.random() * 14,
-        target.z + Math.sin(ang) * radius * 0.5
-      );
-      // narrow scatter around the text — lands ON the letters,
-      // not floating in empty space
-      const end = new THREE.Vector3(
-        target.x + (Math.random() - 0.5) * 10,
-        target.y + (Math.random() - 0.5) * 5,
-        target.z + (Math.random() - 0.5) * 4
-      );
-      const count = generateBolt(start, end, 9, 6, slot.geo.attributes.position.array);
-      slot.geo.setDrawRange(0, count);
-      slot.geo.attributes.position.needsUpdate = true;
-      slot.line.visible = true;
-      slot.life = slot.maxLife = 0.28 + Math.random() * 0.12;
-      slot.mat.opacity = 1.0;
-
-      // charge the glass — soft accumulation. each strike adds 25% of
-      // remaining headroom, so multiple rapid strikes take longer to
-      // saturate the emissive (avoids "too bright too fast" pile-up).
+      // soft accumulation so rapid strikes don't pile past 1.0
       glassCharge.v = glassCharge.v + (1.0 - glassCharge.v) * 0.25;
+      // soft accumulation here too — rapid strikes build up a bigger
+      // pool instead of just resetting to the same flash
+      pkBolt.uCharge.value = Math.min(1.0, pkBolt.uCharge.value + 0.6);
+      pkBolt.uSeed.value = Math.random() * 1000.0;
     }
 
     // exposed so the tick can drive the lifecycle + trigger
     window.__lightning = {
-      slots: lightningSlots,
       fire: fireLightning,
       lastStrikeT: -1,
-      cooldown: 0.10,
+      cooldown: 0.45,
     };
 
     /* ══════════════════════════════════════════════════════════════════
@@ -1403,6 +1343,10 @@
        glassCharge only touches JS material properties — different layers,
        no shared state. */
     const pkWet = { uWet: { value: 0.0 }, uTime: { value: 0.0 }, uPulse: { value: 0.0 } };
+    // world-space direction toward the sun/lensflare anchor (set below once
+    // the flare is created) — shared so the pk glass can catch a matching
+    // sun-glint on its edges as the model turns through the light.
+    const pkSun = { uSunDir: { value: new THREE.Vector3(0.6, 0.55, 0.35).normalize() } };
     function installWetGlass(mat) {
       // Per-letter droplet effect: drops bead and roll down ONLY the glass
       // "pk" letters (object-space), refracting/beading on the surface. The
@@ -1413,9 +1357,12 @@
       const prev = mat.onBeforeCompile;
       mat.onBeforeCompile = (shader) => {
         if (prev) prev(shader);
-        shader.uniforms.uWet   = pkWet.uWet;
-        shader.uniforms.uTime  = pkWet.uTime;
-        shader.uniforms.uPulse = pkWet.uPulse;
+        shader.uniforms.uWet        = pkWet.uWet;
+        shader.uniforms.uTime       = pkWet.uTime;
+        shader.uniforms.uPulse      = pkWet.uPulse;
+        shader.uniforms.uSunDir     = pkSun.uSunDir;
+        shader.uniforms.uBoltCharge = pkBolt.uCharge;
+        shader.uniforms.uBoltSeed   = pkBolt.uSeed;
         // droplet field helpers + a normal perturbation, injected before
         // lighting so the wobble affects reflection/refraction. Object-
         // space position (vWetPos) gives a stable UV that rolls downward.
@@ -1435,6 +1382,42 @@
            uniform float uWet;
            uniform float uTime;
            uniform float uPulse;   // 0..1 music amplitude — pulses the blue glow
+           uniform vec3  uSunDir;  // world-space direction toward the lensflare sun
+           uniform float uBoltCharge;  // 0..1, spikes on each lightning strike, decays fast
+           uniform float uBoltSeed;    // randomized per strike, shifts the bolt's path
+           // ── lightning bolt — fbm domain-warp technique adapted from
+           //    reactbits.dev's "Lightning" background (MIT), ported to
+           //    object-space UV on the letters so the bolt is traced
+           //    ACROSS the pk glass itself (same layer the water droplets
+           //    crawl down) instead of a separate object flying through
+           //    the scene. A straight vertical line, warped by fractal
+           //    noise, reads as a jagged bolt; brightness falls off as
+           //    1/distance from that warped line. ──
+           float boltHash11(float p) { p = fract(p * .1031); p *= p + 33.33; p *= p + p; return fract(p); }
+           float boltHash12(vec2 p) {
+             vec3 p3 = fract(vec3(p.xyx) * .1031);
+             p3 += dot(p3, p3.yzx + 33.33);
+             return fract((p3.x + p3.y) * p3.z);
+           }
+           mat2 boltRot2d(float th) { float c = cos(th), s = sin(th); return mat2(c, -s, s, c); }
+           float boltNoise(vec2 p) {
+             vec2 ip = floor(p), fp = fract(p);
+             float a = boltHash12(ip), b = boltHash12(ip + vec2(1.,0.));
+             float c = boltHash12(ip + vec2(0.,1.)), d = boltHash12(ip + vec2(1.,1.));
+             vec2 t = smoothstep(0., 1., fp);
+             return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+           }
+           // 5 octaves (reactbits uses 10) — plenty jagged at letter scale,
+           // half the per-pixel cost since this only runs while charged.
+           float boltFbm(vec2 p) {
+             float v = 0.0, amp = 0.5;
+             for (int i = 0; i < 5; i++) {
+               v += amp * boltNoise(p);
+               p = boltRot2d(0.45) * p * 2.0;
+               amp *= 0.5;
+             }
+             return v;
+           }
            // ── rain-on-glass droplet field — adapted from "Heartfelt" by
            //    Martijn Steinrucken / BigWIngs (Shadertoy ltffzl,
            //    CC BY-NC-SA 3.0), ported to object-space on the letters.
@@ -1553,6 +1536,59 @@
            float bead = uWet * wetMask;
            gl_FragColor.rgb += vec3(0.70, 0.85, 1.0) * pow(bead, 2.2) * 0.85
                              + vec3(0.30, 0.45, 0.62) * bead * 0.30;
+           // soft white edge glow — rayquaza only. The glass letters are
+           // near-invisible against rayquaza's busy scales; a faint
+           // grazing-angle highlight traces the letterforms. Gated by
+           // (1-uWet) — uWet is already 1 for greninja/0 for rayquaza and
+           // ramps smoothly on the pokemon switch, so this fades out in
+           // sync with that toggle instead of needing its own uniform.
+           {
+             float rayGlow = 1.0 - uWet;
+             vec3 evd = normalize(vViewPosition);
+             vec3 en  = normalize(normal);
+             float efres = pow(1.0 - clamp(dot(en, evd), 0.0, 1.0), 2.2);
+             gl_FragColor.rgb += vec3(1.0) * efres * 0.45 * rayGlow;
+             // sun glint on the edges — same warm tone as the lensflare
+             // sprite, so when the flare direction lines up with a letter
+             // edge it looks like the flare is catching/lighting that
+             // edge, not just an isolated screen-space sprite floating
+             // past. Tight specular lobe from the sun reflection, gated
+             // by the same edge fresnel so it hugs the letterforms.
+             vec3 sunDirView = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
+             vec3 reflDir    = reflect(-sunDirView, en);
+             float glint = pow(clamp(dot(reflDir, evd), 0.0, 1.0), 24.0);
+             gl_FragColor.rgb += vec3(1.0, 0.89, 0.69) * glint * (0.6 + efres * 1.4) * rayGlow;
+           }
+           // lightning "pool" — like the letters caught the strike and
+           // it's arcing/cascading around inside the glass. 7 strands,
+           // each with its own decay curve (some snap out fast, some
+           // linger) so they don't all vanish in lockstep — reads as a
+           // cascade rather than one uniform flash.
+           if (uBoltCharge > 0.001) {
+             // rayquaza-only, same gate as the edge glow/glint above
+             float rayGlow = 1.0 - uWet;
+             vec3 boltSum = vec3(0.0);
+             for (int i = 0; i < 7; i++) {
+               float seed = uBoltSeed + float(i) * 137.219;
+               // stagger each strand's falloff curve off the same shared
+               // charge — low exponent snaps out fast, high exponent
+               // lingers, so the pool thins out unevenly over time
+               float localDecay = pow(uBoltCharge, mix(0.5, 3.0, boltHash11(seed * 3.71)));
+               vec2 buv = vWetPos.xy * 0.10;
+               buv.x += boltHash11(seed) * 20.0 - 10.0;
+               // each strand crawls at its own speed so they read as
+               // separate live arcs, not one pattern repeated
+               float speed = mix(0.9, 2.2, boltHash11(seed * 5.13));
+               buv += 2.0 * boltFbm(buv * 1.6 + vec2(0.0, uTime * speed + seed)) - 1.0;
+               float bdist = abs(buv.x);
+               float flicker = mix(0.03, 0.13, boltHash11(uTime * 37.0 + seed));
+               boltSum += vec3(0.85, 0.90, 1.0) * (flicker / max(bdist, 0.001)) * localDecay;
+             }
+             // scaled down — summed strands raw blow past the bloom
+             // threshold and fuse into one blob instead of reading as a
+             // cluster of separate arcs
+             gl_FragColor.rgb += boltSum * rayGlow * 0.60;
+           }
            // blue fresnel rim + soft inner glow so the glass letters stay
            // visible against the dark water (greninja/underwater only, via
            // uWet — rayquaza glass is untouched). Brightest at glancing
@@ -2566,39 +2602,30 @@
 
       // lightning lifecycle + audio-reactive trigger
       if (window.__lightning) {
-        const dt = Math.min(0.05, t - (window.__lastT || t));
         const L = window.__lightning;
-        for (const slot of L.slots) {
-          if (slot.life > 0) {
-            slot.life -= dt;
-            // sharp falloff so bolts vanish fast (lightning IRL stays
-            // visible only a few frames)
-            const k = Math.max(0, slot.life / slot.maxLife);
-            slot.mat.opacity = k * k;
-            if (slot.life <= 0) slot.line.visible = false;
-          }
-        }
+        // bolt flash decays fast — a few frames, like real lightning
+        pkBolt.uCharge.value *= 0.90;
+        if (pkBolt.uCharge.value < 0.01) pkBolt.uCharge.value = 0;
         // trigger: amp peaks above threshold, with cooldown.
         // music-driven strikes are kept rare so the scene doesn't
         // pile up into solid white; ambient trickle stays as-is.
         // rayquaza-only: no new strikes while greninja is shown (existing
         // bolts still decay out above, so the toggle leaves no artifacts).
         const ready = !isGreninja && (t - L.lastStrikeT) > L.cooldown;
-        const ampTrigger     = ready && amp > 0.30 && Math.random() < 0.55;
+        const ampTrigger     = ready && amp > 0.30 && Math.random() < 0.35;
         const ambientTrigger = ready && Math.random() < 0.025;
         if (ampTrigger || ambientTrigger) {
           L.fire();
           L.lastStrikeT = t;
         }
 
-        // decay the glass charge and modulate OPTICAL properties of
-        // the pk material. Heavy emissive made it read as glowing
-        // plastic; instead we drive the glass-specific knobs so the
-        // material itself feels "energized":
+        // decay the glass charge and modulate OPTICAL properties of the pk
+        // material — the actual bolt flash is now drawn by the shader
+        // (installLightningBolt) instead of a flat emissive tint, so this
+        // just keeps the material feeling "energized":
         //   - iridescence climbs (rainbow shimmer intensifies)
         //   - dispersion climbs (RGB split at edges goes wild)
         //   - clearcoat sharpens (mirror-flash on surface)
-        //   - faint inner emissive lifts the body without dominating
         if (pkText) {
           glassCharge.v *= 0.94;
           if (glassCharge.v < 0.002) glassCharge.v = 0;
@@ -2615,10 +2642,6 @@
           mat.clearcoat          = baseClearcoat  + (peakClearcoat  - baseClearcoat)  * k;
           mat.clearcoatRoughness = baseCcRough    + (peakCcRough    - baseCcRough)    * k;
           mat.envMapIntensity    = baseEnv        + (peakEnv        - baseEnv)        * k;
-          // very subtle internal glow — just enough to suggest the
-          // glass is conducting, not enough to read as a light bulb
-          mat.emissive.setRGB(0.10 * k, 0.18 * k, 0.28 * k);
-          mat.emissiveIntensity = 0.25 * k;
         }
       }
       window.__lastT = t;
