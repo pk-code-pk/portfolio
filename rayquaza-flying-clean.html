@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <title>rayquaza · flying (clean)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
+  <!-- kick off the heavy same-origin fetches before script parse -->
+  <link rel="modulepreload" href="vendor/three.bundle.min.js?v=2">
+  <link rel="preload" href="rayquaza/rayquaza.glb" as="fetch" crossorigin="anonymous">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
@@ -37,6 +37,15 @@
       font-family: ui-monospace, 'SF Mono', Menlo, monospace;
       font-size: .6rem; letter-spacing: .28em;
       color: rgba(255,255,255,0.5);
+    }
+    /* narrow screens: the bottom-center music player (parent-owned) spans
+       nearly the full width and sat on top of this label. Tuck the label
+       top-left under the nav instead — that corner of the hero is empty. */
+    @media (max-width: 640px) {
+      #status { bottom: auto; top: 66px; gap: 10px; }
+      #status .st-logo { width: 32px; }
+      #status .st-main { font-size: 1.1rem; }
+      #status .st-sub  { font-size: .52rem; letter-spacing: .22em; }
     }
     #err    { position: fixed; left: 14px; right: 14px; top: 14px;
               background: rgba(60,0,0,0.85); color: #ffd0d0; font-size: 12px;
@@ -129,7 +138,11 @@
   <canvas id="c"></canvas>
   <div id="status">loading…</div>
   <div id="err"></div>
-  <audio id="bg-audio" src="music/bg-music.mp3" loop preload="auto"></audio>
+  <!-- preload="none": when EMBEDDED the parent owns audio (this element is
+     muted + unused), so preload="auto" was downloading the multi-MB track a
+     second time on every page load. Standalone playback still works — play()
+     triggers the fetch. -->
+<audio id="bg-audio" src="music/bg-music.mp3" loop preload="none"></audio>
 
   <!-- music player: play toggle + elastic volume slider -->
   <div id="music-player">
@@ -319,16 +332,15 @@
       The bright sky becomes the IBL, which is what finally lets the
       model's metallic surfaces show their actual color instead of black.
     */
-    import * as THREE                       from 'https://esm.sh/three@0.160';
-    import { GLTFLoader }                   from 'https://esm.sh/three@0.160/examples/jsm/loaders/GLTFLoader.js';
-    import { FontLoader }                   from 'https://esm.sh/three@0.160/examples/jsm/loaders/FontLoader.js';
-    import { TextGeometry }                 from 'https://esm.sh/three@0.160/examples/jsm/geometries/TextGeometry.js';
-    import { Lensflare, LensflareElement }  from 'https://esm.sh/three@0.160/examples/jsm/objects/Lensflare.js';
-    import { EffectComposer }               from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/EffectComposer.js';
-    import { RenderPass }                   from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/RenderPass.js';
-    import { UnrealBloomPass }              from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/UnrealBloomPass.js';
-    import { OutputPass }                   from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/OutputPass.js';
-    import { ShaderPass }                    from 'https://esm.sh/three@0.160/examples/jsm/postprocessing/ShaderPass.js';
+    // single self-hosted bundle (three + every addon this scene uses).
+    // Replaces a 20-request, 2-hop esm.sh module chain — one same-origin
+    // fetch, no CDN round-trips, huge win on mobile RTT.
+    import {
+      THREE, GLTFLoader, FontLoader, TextGeometry,
+      Lensflare, LensflareElement,
+      EffectComposer, RenderPass, UnrealBloomPass, OutputPass,
+      toCreasedNormals
+    } from './vendor/three.bundle.min.js?v=2';
 
     const canvas = document.getElementById('c');
     const status = document.getElementById('status');
@@ -337,7 +349,7 @@
     const log = (m) => { console.log('[hero]', m); };
 
     status.innerHTML =
-      '<img class="st-logo" src="harvard-logo.png" alt="" />' +
+      '<img class="st-logo" src="harvard-logo.webp" alt="" />' +
       '<span class="st-text"><span class="st-main">harvard cs</span>' +
       '<span class="st-sub">class of 2028</span></span>';
 
@@ -346,31 +358,53 @@
     // load (bloom + nebula + transmission are all per-pixel heavy), the
     // single biggest win against mobile scroll jank.
     const TOUCH_DEVICE = window.matchMedia('(hover: none), (pointer: coarse)').matches;
-    const DPR_CAP = 2;   // restored: mobile was capped at 1 during the underwater
-                         // rework which halved hero resolution on phones (blurry).
-                         // 2 matches the original sharp version on all devices.
+    // touch: NATIVE DPR (phones are DPR 3 — anything less is upscaled and
+    // reads as soft/pixely edges next to the razor-sharp DOM text around
+    // it). Desktop: native × 1.4 SUPERSAMPLE (capped 2.8) — renders above
+    // the physical grid and downscales, which is what makes the glass
+    // letters read "crispy" rather than merely correct; desktop GPUs have
+    // the headroom. Resolution is constant for the whole visit — the
+    // relief valve only ever touches the transmission buffer.
+    const DPR_CAP = TOUCH_DEVICE
+      ? (window.devicePixelRatio || 2)
+      : Math.min((window.devicePixelRatio || 1) * 1.4, 2.8);
     // antialias:false — EffectComposer renders to its own MSAA render targets;
     // the renderer's native AA applies only to the default framebuffer which
     // the composer never uses. MSAA on composer.renderTarget1/2 handles AA.
     // powerPreference hints OS to use discrete GPU on dual-GPU machines.
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP));
+    // DPR_CAP is the FULL target (touch: native; desktop: 1.4× native
+    // supersample) — no min() against native or the supersample would be
+    // clamped away.
+    renderer.setPixelRatio(DPR_CAP);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping      = THREE.NoToneMapping;
     renderer.toneMappingExposure = 1.0;
     // the pk glass uses transmission:1.0, which makes three.js render the
-    // WHOLE scene into an offscreen buffer every frame (at full res by
-    // default) just to sample refraction through it. That extra full-scene
-    // pass is the single biggest hidden cost in this file — dropping its
-    // resolution to a quarter is invisible (it's just soft background blur
-    // behind the letters) but removes most of the GPU cost.
-    renderer.transmissionResolutionScale = 0.25;
+    // WHOLE scene into an offscreen buffer every frame just to sample
+    // refraction through it. It was scaled to 0.25 for GPU savings, but that
+    // quarter-res buffer is exactly what the "pk" letters refract — they
+    // looked soft/low-res. Full res on desktop restores crisp refraction;
+    // 0.5 on touch is DPR1-equivalent (sharp) at a quarter of the cost.
+    // This buffer IS the visible body of the pk letters (transmission =
+    // the letters show the scene refracted through them). It also costs a
+    // full second scene render per frame. Rule: its EFFECTIVE resolution
+    // (scale × DPR) must stay ≥ 2.0 — the sharpness bar the letters need.
+    //   desktop: 1.0 × DPR2   = 2.0
+    //   touch:   0.7 × DPR3   = 2.1  (scene render at half the pixels)
+    renderer.transmissionResolutionScale = TOUCH_DEVICE ? 0.7 : 1.0;
 
     /* ── scene ─────────────────────────────────────────────────────── */
     const scene  = new THREE.Scene();
     scene.background = new THREE.Color('#000000');
     const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 4000);
+    // camera distance from the model center (see tick) — farther on touch
+    const CAM_DIST = TOUCH_DEVICE ? 63 : 55;
+    // negative = slide the composition RIGHT on screen (touch-only optical
+    // centering fix; see the camera block in tick)
+    const CAM_X_SHIFT = TOUCH_DEVICE ? -0.3 : 0;
+    const _camTarget = new THREE.Vector3();
 
     // click → raycast Rayquaza. The parent (which owns pointer events,
     // since this iframe is pointer-events:none) sets window.__heroClick to
@@ -450,8 +484,11 @@
             return n;
           }
           float fbm(vec3 p){
+            // 4 octaves desktop / 3 touch (was 5) — higher octaves are
+            // sub-pixel at this sphere distance; the nebula runs on every
+            // pixel of every frame so this is a steady mobile win.
             float v = 0.0; float a = 0.5;
-            for (int i = 0; i < 5; i++){ v += a * noise(p); p *= 2.05; a *= 0.5; }
+            for (int i = 0; i < ${TOUCH_DEVICE ? 3 : 4}; i++){ v += a * noise(p); p *= 2.05; a *= 0.5; }
             return v;
           }
 
@@ -640,10 +677,8 @@
       sunAnchor.position.copy(sunDir).multiplyScalar(900);
       scene.add(sunAnchor);
 
-      // textures live in the three.js gh repo (npm strips them)
-      const texLoader = new THREE.TextureLoader().setPath(
-        'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/textures/lensflare/'
-      );
+      // self-hosted (were fetched from the three.js gh repo via jsdelivr)
+      const texLoader = new THREE.TextureLoader().setPath('vendor/');
       const flare0 = texLoader.load('lensflare0.png');
       const flare3 = texLoader.load('lensflare3.png');
 
@@ -723,37 +758,8 @@
       }
     };
 
-    /* ── lightning (procedural bolt traced across the pk glass) ────────
-       Previously: separate world-space Line objects flying through the
-       sky toward the letters, plus a flat emissive "flash" on the glass.
-       Replaced with a single technique matching the wet-glass droplets on
-       the gyarados/greninja screen — the bolt is generated IN the pk
-       letter fragment shader (installLightningBolt below), in the same
-       object-space UV as the droplets, using the reactbits.dev Lightning
-       background's fbm domain-warp technique (a straight line warped by
-       fractal noise reads as a jagged bolt; brightness ~ 1/distance from
-       that warped line). `charge` spikes on each strike and decays fast —
-       the shader reads it as uBoltCharge and only draws the bolt while
-       nonzero, so it's tied to the SAME letters the water droplets crawl
-       down, not a separate object in world space. */
-    const glassCharge = { v: 0 };          // energizes iridescence/clearcoat (unchanged)
-    const pkBolt = { uCharge: { value: 0 }, uSeed: { value: 0 } };
-
-    function fireLightning() {
-      // soft accumulation so rapid strikes don't pile past 1.0
-      glassCharge.v = glassCharge.v + (1.0 - glassCharge.v) * 0.25;
-      // soft accumulation here too — rapid strikes build up a bigger
-      // pool instead of just resetting to the same flash
-      pkBolt.uCharge.value = Math.min(1.0, pkBolt.uCharge.value + 0.6);
-      pkBolt.uSeed.value = Math.random() * 1000.0;
-    }
-
-    // exposed so the tick can drive the lifecycle + trigger
-    window.__lightning = {
-      fire: fireLightning,
-      lastStrikeT: -1,
-      cooldown: 0.45,
-    };
+    /* (lightning system removed — the letters now carry a steady soft
+       glow instead; see the edge-glow block in installWetGlass.) */
 
     /* ══════════════════════════════════════════════════════════════════
        GRENINJA WORLD — water/ninja theme. Everything here is built once
@@ -1183,14 +1189,17 @@
     // a custom render target. The defaults are HDR-friendly and resize
     // correctly with composer.setSize().
     const composer = new EffectComposer(renderer);
-    composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP));
+    composer.setPixelRatio(DPR_CAP);
     composer.setSize(window.innerWidth, window.innerHeight);
     // MSAA: 4x desktop, 2x touch. (Full DPR=2 now does most of the AA work
     // on mobile; a light 2x cleans remaining edges without the heavy 4x-on-
     // HDR cost that chokes weaker mobile GPUs.)
     // 2x MSAA on desktop: at DPR=2 each logical pixel maps to 4 physical pixels
     // (natural SSAA), so 2x MSAA = 8x effective AA — clean edges, half the cost of 4x.
-    const MSAA = TOUCH_DEVICE ? 1 : 2;
+    // desktop 4 / touch 2: at native DPR-3 on phones, geometric edges are
+    // fine enough that 2x MSAA finishes them; 4x doubled HDR-target
+    // bandwidth for no visible gain at that pixel density (the lag).
+    const MSAA = TOUCH_DEVICE ? 2 : 4;
     composer.renderTarget1.samples = MSAA;
     composer.renderTarget2.samples = MSAA;
     composer.renderTarget1.texture.type = THREE.HalfFloatType;
@@ -1199,116 +1208,21 @@
     // (resolution, strength, radius, threshold) — high threshold so
     // only the bright env-driven highlights bloom; starfield + glass
     // stay clean.
-    // half-res bloom: UnrealBloom is inherently blurry so half-res is visually
-    // identical to full-res at this threshold. Saves ~75% of bloom GPU work.
+    // FULL-res bloom on every device. Half-res turns the model's tight neon
+    // rims and the letters' edge glow into blocky stair-stepped halos — it
+    // was tried on touch as a perf save and read as "boxy pixely glow".
+    // The budget comes from the removed touch terminal effect + cheaper
+    // nebula; the relief valve (transmission) covers weak GPUs.
     const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth >> 1, window.innerHeight >> 1),
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
       0.55,   // strength
       0.40,   // radius
       1.05    // threshold (only HDR-ish brights pass)
     );
     composer.addPass(bloomPass);
 
-    /* ── RAIN-ON-GLASS (fullscreen post-process) ───────────────────────
-       Refracts the whole composited image as if seen through a rain-
-       covered pane of glass: layered droplets bead and roll down leaving
-       residual-bead trails, each drop acts as a lens (gradient-of-height
-       refraction that bends + magnifies the scene behind it), and the dry
-       glass is softly fogged. Driven by uWet (synced from pkWet each
-       frame): ramps in for Greninja, a true no-op for Rayquaza.
-       Original clean-room implementation of the well-known stateless
-       wet-window technique. */
-    const RainShader = {
-      uniforms: {
-        tDiffuse:    { value: null },               // auto-filled by ShaderPass
-        iResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
-        iTime:       { value: 0 },
-        uWet:        { value: 0 },
-      },
-      vertexShader: `varying vec2 vUv;
-        void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-      fragmentShader: `
-        precision highp float;
-        uniform sampler2D tDiffuse;
-        uniform vec2  iResolution;
-        uniform float iTime;
-        uniform float uWet;
-        varying vec2  vUv;
-
-        const float DROP_SPEED  = 0.42;
-        const float REFRACT     = 0.05;
-        const float BLUR_AMT    = 0.0;
-
-        float hash11(float p){ p=fract(p*0.1031); p*=p+33.33; p*=p+p; return fract(p); }
-        vec3  hash31(float p){ vec3 q=fract(vec3(p)*vec3(.1031,.1030,.0973));
-          q+=dot(q,q.yzx+33.33); return fract((q.xxy+q.yzz)*q.zyx); }
-        float S(float a,float b,float t){ return smoothstep(a,b,t); }
-        float Saw(float b,float t){ return S(0.,b,t)*S(1.,b,t); }
-
-        // one layer of rolling drops + trails → (height, clarity)
-        vec2 dropLayer(vec2 uv, float t){
-          vec2 grid = vec2(6.0, 1.0);
-          uv.y += t * DROP_SPEED;
-          vec2 id = floor(uv*grid);
-          vec3 n  = hash31(id.x*35.2 + id.y*2376.1);
-          vec2 st = fract(uv*grid) - vec2(0.5, 0.0);
-          float ti = fract(t*(0.5+n.z*0.5) + n.z);
-          float y  = (Saw(0.85, ti)-0.5)*0.9 + 0.5;
-          float x  = n.x - 0.5;
-          x += sin(y + sin(y))*(0.5-abs(x))*(n.z-0.5);
-          vec2 p = vec2(x, y);
-          float d = length((st-p)*grid.yx);
-          float mainDrop = S(0.4, 0.0, d);
-          float r  = sqrt(S(1.0, y, st.y));
-          float cd = abs(st.x - x);
-          float trail = S(0.23*r, 0.15*r*r, cd) * S(-0.02, 0.02, st.y - y);
-          float droplets = max(0.0, (sin(st.y*(1.0-st.y)*120.0) - st.y)) * trail * n.z;
-          float m = mainDrop + droplets*r*mainDrop;
-          return vec2(m, max(mainDrop, droplets*0.5));
-        }
-        vec2 getDrops(vec2 uv, float t){
-          vec2 c = vec2(0.0);
-          c += dropLayer(uv*1.0, t);
-          c += dropLayer(uv*1.85 + 7.7, t*1.3);
-          vec2 sid = fract(uv*30.0);
-          vec3 sn  = hash31(dot(floor(uv*30.0), vec2(7.0,113.0)));
-          float stat = S(0.3,0.0, length(sid-0.5)) * Saw(0.025, fract(t*0.3+sn.z));
-          c += vec2(stat*0.6);
-          return c;
-        }
-
-        void main(){
-          vec2 uv = vUv;
-          if (uWet <= 0.001){ gl_FragColor = texture2D(tDiffuse, uv); return; }  // no-op (rayquaza)
-          vec2 asp = vec2(iResolution.x/iResolution.y, 1.0);
-          vec2 guv = (uv-0.5)*asp + 0.5;
-          float t  = iTime;
-
-          vec2  c    = getDrops(guv, t);
-          float e    = 1.5/iResolution.y;
-          float hx   = getDrops(guv+vec2(e,0.0), t).x;
-          float hy   = getDrops(guv+vec2(0.0,e), t).x;
-          vec2  grad = vec2(hx - c.x, hy - c.x);
-          vec2  refr = uv - grad*REFRACT*uWet;
-
-          float clarity = clamp(c.y, 0.0, 1.0);
-          // sample the scene SHARP (only the tiny refraction offset) — no blur
-          // sampling, no darkening, so the view stays clear behind the glass.
-          vec3 col = texture2D(tDiffuse, refr).rgb;
-
-          float glint = pow(clamp(grad.y*-6.0,0.0,1.0), 2.0) * clarity;
-          col += glint*0.28*uWet;   // bright beads so droplets still read on the glass
-
-          vec3 dry = texture2D(tDiffuse, uv).rgb;
-          // droplets/glints are visible on the letters, but refraction+blur
-          // are kept low (consts above) so the wet pass doesn't smear or
-          // block the text + greninja behind it.
-          gl_FragColor = vec4(mix(dry, col, uWet * 0.75), 1.0);
-        }`,
-    };
-    const rainPass = new ShaderPass(RainShader);
-    rainPass.enabled = false;   // flipped on once uWet > 0 (greninja)
-    composer.addPass(rainPass);
+    /* (rain-on-glass fullscreen post-process REMOVED — it was permanently
+       disabled; per-letter droplets from installWetGlass are the wet effect.) */
 
     // OutputPass applies ACES Filmic at the END so bloom is computed in
     // linear and only tone-mapped once.
@@ -1361,8 +1275,6 @@
         shader.uniforms.uTime       = pkWet.uTime;
         shader.uniforms.uPulse      = pkWet.uPulse;
         shader.uniforms.uSunDir     = pkSun.uSunDir;
-        shader.uniforms.uBoltCharge = pkBolt.uCharge;
-        shader.uniforms.uBoltSeed   = pkBolt.uSeed;
         // droplet field helpers + a normal perturbation, injected before
         // lighting so the wobble affects reflection/refraction. Object-
         // space position (vWetPos) gives a stable UV that rolls downward.
@@ -1383,41 +1295,6 @@
            uniform float uTime;
            uniform float uPulse;   // 0..1 music amplitude — pulses the blue glow
            uniform vec3  uSunDir;  // world-space direction toward the lensflare sun
-           uniform float uBoltCharge;  // 0..1, spikes on each lightning strike, decays fast
-           uniform float uBoltSeed;    // randomized per strike, shifts the bolt's path
-           // ── lightning bolt — fbm domain-warp technique adapted from
-           //    reactbits.dev's "Lightning" background (MIT), ported to
-           //    object-space UV on the letters so the bolt is traced
-           //    ACROSS the pk glass itself (same layer the water droplets
-           //    crawl down) instead of a separate object flying through
-           //    the scene. A straight vertical line, warped by fractal
-           //    noise, reads as a jagged bolt; brightness falls off as
-           //    1/distance from that warped line. ──
-           float boltHash11(float p) { p = fract(p * .1031); p *= p + 33.33; p *= p + p; return fract(p); }
-           float boltHash12(vec2 p) {
-             vec3 p3 = fract(vec3(p.xyx) * .1031);
-             p3 += dot(p3, p3.yzx + 33.33);
-             return fract((p3.x + p3.y) * p3.z);
-           }
-           mat2 boltRot2d(float th) { float c = cos(th), s = sin(th); return mat2(c, -s, s, c); }
-           float boltNoise(vec2 p) {
-             vec2 ip = floor(p), fp = fract(p);
-             float a = boltHash12(ip), b = boltHash12(ip + vec2(1.,0.));
-             float c = boltHash12(ip + vec2(0.,1.)), d = boltHash12(ip + vec2(1.,1.));
-             vec2 t = smoothstep(0., 1., fp);
-             return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
-           }
-           // 5 octaves (reactbits uses 10) — plenty jagged at letter scale,
-           // half the per-pixel cost since this only runs while charged.
-           float boltFbm(vec2 p) {
-             float v = 0.0, amp = 0.5;
-             for (int i = 0; i < 5; i++) {
-               v += amp * boltNoise(p);
-               p = boltRot2d(0.45) * p * 2.0;
-               amp *= 0.5;
-             }
-             return v;
-           }
            // ── rain-on-glass droplet field — adapted from "Heartfelt" by
            //    Martijn Steinrucken / BigWIngs (Shadertoy ltffzl,
            //    CC BY-NC-SA 3.0), ported to object-space on the letters.
@@ -1547,7 +1424,12 @@
              vec3 evd = normalize(vViewPosition);
              vec3 en  = normalize(normal);
              float efres = pow(1.0 - clamp(dot(en, evd), 0.0, 1.0), 2.2);
-             gl_FragColor.rgb += vec3(1.0) * efres * 0.45 * rayGlow;
+             // kept LOW on purpose: anything stronger feeds the bloom pass
+             // and wraps the letterforms in a soft halo — which reads as
+             // "blurry/not crispy". Edge definition should come from the
+             // sharp bevel specular, not glow.
+             gl_FragColor.rgb += vec3(1.0) * efres * 0.18 * rayGlow;
+             gl_FragColor.rgb += vec3(0.45, 0.62, 1.0) * efres * (0.09 + uPulse * 0.10) * rayGlow;
              // sun glint on the edges — same warm tone as the lensflare
              // sprite, so when the flare direction lines up with a letter
              // edge it looks like the flare is catching/lighting that
@@ -1558,36 +1440,8 @@
              vec3 reflDir    = reflect(-sunDirView, en);
              float glint = pow(clamp(dot(reflDir, evd), 0.0, 1.0), 24.0);
              gl_FragColor.rgb += vec3(1.0, 0.89, 0.69) * glint * (0.6 + efres * 1.4) * rayGlow;
-           }
-           // lightning "pool" — like the letters caught the strike and
-           // it's arcing/cascading around inside the glass. 7 strands,
-           // each with its own decay curve (some snap out fast, some
-           // linger) so they don't all vanish in lockstep — reads as a
-           // cascade rather than one uniform flash.
-           if (uBoltCharge > 0.001) {
-             // rayquaza-only, same gate as the edge glow/glint above
-             float rayGlow = 1.0 - uWet;
-             vec3 boltSum = vec3(0.0);
-             for (int i = 0; i < 7; i++) {
-               float seed = uBoltSeed + float(i) * 137.219;
-               // stagger each strand's falloff curve off the same shared
-               // charge — low exponent snaps out fast, high exponent
-               // lingers, so the pool thins out unevenly over time
-               float localDecay = pow(uBoltCharge, mix(0.5, 3.0, boltHash11(seed * 3.71)));
-               vec2 buv = vWetPos.xy * 0.10;
-               buv.x += boltHash11(seed) * 20.0 - 10.0;
-               // each strand crawls at its own speed so they read as
-               // separate live arcs, not one pattern repeated
-               float speed = mix(0.9, 2.2, boltHash11(seed * 5.13));
-               buv += 2.0 * boltFbm(buv * 1.6 + vec2(0.0, uTime * speed + seed)) - 1.0;
-               float bdist = abs(buv.x);
-               float flicker = mix(0.03, 0.13, boltHash11(uTime * 37.0 + seed));
-               boltSum += vec3(0.85, 0.90, 1.0) * (flicker / max(bdist, 0.001)) * localDecay;
-             }
-             // scaled down — summed strands raw blow past the bloom
-             // threshold and fuse into one blob instead of reading as a
-             // cluster of separate arcs
-             gl_FragColor.rgb += boltSum * rayGlow * 0.60;
+
+
            }
            // blue fresnel rim + soft inner glow so the glass letters stay
            // visible against the dark water (greninja/underwater only, via
@@ -1610,13 +1464,15 @@
     /* ── pk logo (loaded in parallel with model) ──────────────────── */
     let pkText = null;
     new FontLoader().load(
-      'https://cdn.jsdelivr.net/npm/three@0.160/examples/fonts/helvetiker_bold.typeface.json',
+      'vendor/helvetiker_bold.typeface.json',
       (font) => {
         const geo = new TextGeometry('pk', {
           font,
           size: 8,
           height: 2.2,
-          curveSegments: 24,
+          curveSegments: 40,   // 24 → 40: the p/k bowls showed faceting at
+                               // native-DPR phones; geometry is built once,
+                               // extra verts cost nothing per frame
           bevelEnabled: true,
           // very small bevel — just enough to soften the sharp corner
           // and pick up a hairline highlight, not enough to read as a
@@ -1624,10 +1480,17 @@
           bevelThickness: 0.06,
           bevelSize: 0.025,
           bevelOffset: 0,
-          bevelSegments: 4
+          bevelSegments: 6
         });
         geo.computeBoundingBox();
         geo.center();
+        // TextGeometry ships FLAT facet normals — on high-gloss glass every
+        // curve segment catches light as its own plane, so the p/k bowls
+        // showed discrete "boxes" of shading. Smooth normals across facets
+        // whose angle is below ~36° (the curve steps) while keeping true
+        // creases (front face ↔ bevel ↔ sides) sharp.
+        const smoothed = toCreasedNormals(geo, Math.PI / 5);
+        geo.dispose();
         // refined glass — adds three layers of nuance on top of the base
         // refraction:
         //   1) iridescence — thin-film interference creates subtle
@@ -1659,6 +1522,9 @@
           dispersion: 0.2,
           transparent: true,
           side: THREE.DoubleSide,
+          // dithering breaks up banding in the soft glow/fresnel gradients —
+          // smooth color steps read as "pixely" contour bands without it
+          dithering: true,
           // CRITICAL: exempt the glass from scene.fog. Underwater the
           // FogExp2 water haze would otherwise wash the letters into a
           // flat blue blob; keeping fog off the glass lets it stay clear,
@@ -1668,7 +1534,7 @@
           fog: false
         });
         installWetGlass(mat);   // wet-glass shader (inert until uWet > 0)
-        pkText = new THREE.Mesh(geo, mat);
+        pkText = new THREE.Mesh(smoothed, mat);
         if (model) pkText.position.copy(modelCenter);
         scene.add(pkText);
       }
@@ -1755,10 +1621,25 @@
         // provides the highlights + rim so chrome reads chrome, not black.
         // Selective brightness boost on the model (small margin) WITHOUT
         // changing materials on the pk text (which keeps its own settings).
+        const maxAniso = renderer.capabilities.getMaxAnisotropy();
         model.traverse(o => {
           if (o.isMesh && o.material) {
             const mats = Array.isArray(o.material) ? o.material : [o.material];
             mats.forEach(m => {
+              // texture quality: max anisotropy (sharp at glancing angles —
+              // most of the serpent's body IS at a glancing angle) and force
+              // smooth linear filtering in case the export baked in nearest
+              // (reads as hard pixel blocks when magnified).
+              ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap'].forEach(k => {
+                const tex = m[k];
+                if (tex && tex.isTexture) {
+                  tex.anisotropy = maxAniso;
+                  if (tex.magFilter === THREE.NearestFilter) tex.magFilter = THREE.LinearFilter;
+                  if (tex.minFilter === THREE.NearestFilter || tex.minFilter === THREE.NearestMipmapNearestFilter)
+                    tex.minFilter = THREE.LinearMipmapLinearFilter;
+                  tex.needsUpdate = true;
+                }
+              });
               if ('envMapIntensity' in m) m.envMapIntensity = 2.0;   // ~25% lift
               if ('roughness' in m)       m.roughness = Math.max(m.roughness, 0.25);
               // tiny self-glow so the body never crushes to pure black
@@ -1924,7 +1805,10 @@
           const baseShape = (th) => new THREE.Vector3(
             Math.cos(th) * 1.35,                                   // wide X orbit
             0.60 * Math.sin(th) + 0.16 * Math.sin(2*th + 0.5),     // ellipse + teardrop
-            0.55 * Math.sin(th + 1.1) + 0.20 * Math.sin(3*th)      // depth weave, 3 gentle lobes
+            // depth weave — amplitude raised 0.55 → 0.95 (same phase, same
+            // lobes): identical orbit, it just travels far enough in Z now
+            // to pass clearly IN FRONT of and BEHIND the letters each lap.
+            0.95 * Math.sin(th + 1.1) + 0.20 * Math.sin(3*th)
           );
           const SHN = 260;
           // measure base length
@@ -2411,8 +2295,7 @@
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
       composer.setSize(window.innerWidth, window.innerHeight);
-      bloomPass.setSize(window.innerWidth >> 1, window.innerHeight >> 1); // half-res
-      rainPass.uniforms.iResolution.value.set(window.innerWidth, window.innerHeight);
+      bloomPass.setSize(window.innerWidth, window.innerHeight);
     });
 
     /* ── animate ──────────────────────────────────────────────────── */
@@ -2495,6 +2378,8 @@
     // renderMode drives the tick's frame-gating below.
     let renderMode = 'resume';
     let lastFrameT = 0;
+    // adaptive-quality ratchet state (see tick)
+    let aqFrames = 0, aqSlow = 0, aqLevel = 0;
     window.addEventListener('message', (e) => {
       const action = e.data && e.data.__heroAction;
       if (action === 'pause' || action === 'throttle' || action === 'resume') {
@@ -2533,7 +2418,42 @@
       // of hitching on shader-recompile + layer re-promotion.
       if (renderMode === 'pause')    { if (now - lastFrameT < 200) return; }  // ~5fps
       else if (renderMode === 'throttle') { if (now - lastFrameT < 48) return; } // ~20fps
+      const _prevFrameT = lastFrameT;
       lastFrameT = now;
+
+      /* ── adaptive quality (one-way ratchet) ─────────────────────────
+         Weak GPUs (old phones, integrated laptops) can't hold this scene
+         at the crisp settings. Watch real frame times while running at
+         full rate; if >50% of a ~2s window misses ~38fps, step down:
+           level 1 → DPR cap 1.5
+           level 2 → DPR cap 1.25 + cheaper transmission buffer
+         Strong devices never trigger it and keep max quality. */
+      // Adaptive relief valve — NEVER touches resolution (a visible drop in
+      // sharpness reads as "the site degraded"). If a device sustains
+      // <30fps it only shrinks the transmission (refraction) buffer, which
+      // shows up as marginally softer blur BEHIND the glass letters — the
+      // one place the eye can't tell. Warmup-gated so load frames never
+      // count.
+      if (renderMode === 'resume' && now > 10000) {
+        const _fdt = now - _prevFrameT;
+        if (_fdt > 0 && _fdt < 250) {           // ignore tab-switch gaps
+          aqFrames++;
+          if (_fdt > 34) aqSlow++;              // < ~30fps
+          if (aqFrames >= 180) {                // judge every ~3s
+            if (aqSlow / aqFrames > 0.65 && aqLevel < 2) {
+              aqLevel++;
+              // gentle steps only — the letters live in this buffer. Floors
+              // keep effective res (×DPR) ≥ ~1.7 (mild softening, never
+              // pixelation).
+              renderer.transmissionResolutionScale = TOUCH_DEVICE
+                ? (aqLevel === 1 ? 0.6 : 0.55)
+                : (aqLevel === 1 ? 0.85 : 0.75);
+              log('adaptive: transmission buffer → ' + renderer.transmissionResolutionScale);
+            }
+            aqFrames = 0; aqSlow = 0;
+          }
+        }
+      } else { aqFrames = 0; aqSlow = 0; }
       const t = clock.getElapsedTime();
       // mixer delta — independent of window.__lastT (which the lightning
       // block also uses). clamped so a tab-resume / throttle gap doesn't
@@ -2572,13 +2492,6 @@
         const w = pkWet.uWet;
         w.value += Math.sign(wetTarget - w.value) * Math.min(Math.abs(wetTarget - w.value), WET_RAMP * dtWet);
       }
-      // fullscreen rain-on-glass pass STAYS DISABLED — it smeared/blurred
-      // the WHOLE view (text + model). Droplets now come ONLY from the
-      // per-letter installWetGlass injection on the pk glass, so the rest
-      // of the scene stays sharp.
-      rainPass.uniforms.uWet.value  = pkWet.uWet.value;
-      rainPass.uniforms.iTime.value = t;
-      rainPass.enabled = false;
       if (isGreninja) {
         // advance the underwater dome (caustics scroll + god-ray drift) and
         // feed the music amplitude so the scene PULSES with the beat
@@ -2600,50 +2513,6 @@
         greninjaRim.intensity.value = 0;
       }
 
-      // lightning lifecycle + audio-reactive trigger
-      if (window.__lightning) {
-        const L = window.__lightning;
-        // bolt flash decays fast — a few frames, like real lightning
-        pkBolt.uCharge.value *= 0.90;
-        if (pkBolt.uCharge.value < 0.01) pkBolt.uCharge.value = 0;
-        // trigger: amp peaks above threshold, with cooldown.
-        // music-driven strikes are kept rare so the scene doesn't
-        // pile up into solid white; ambient trickle stays as-is.
-        // rayquaza-only: no new strikes while greninja is shown (existing
-        // bolts still decay out above, so the toggle leaves no artifacts).
-        const ready = !isGreninja && (t - L.lastStrikeT) > L.cooldown;
-        const ampTrigger     = ready && amp > 0.30 && Math.random() < 0.35;
-        const ambientTrigger = ready && Math.random() < 0.025;
-        if (ampTrigger || ambientTrigger) {
-          L.fire();
-          L.lastStrikeT = t;
-        }
-
-        // decay the glass charge and modulate OPTICAL properties of the pk
-        // material — the actual bolt flash is now drawn by the shader
-        // (installLightningBolt) instead of a flat emissive tint, so this
-        // just keeps the material feeling "energized":
-        //   - iridescence climbs (rainbow shimmer intensifies)
-        //   - dispersion climbs (RGB split at edges goes wild)
-        //   - clearcoat sharpens (mirror-flash on surface)
-        if (pkText) {
-          glassCharge.v *= 0.94;
-          if (glassCharge.v < 0.002) glassCharge.v = 0;
-          const k = glassCharge.v;
-          const mat = pkText.material;
-          // bases (matching the baseline material config above)
-          const baseIrid       = 0.25,  peakIrid       = 0.95;
-          const baseDisp       = 0.20,  peakDisp       = 0.90;
-          const baseClearcoat  = 0.50,  peakClearcoat  = 1.00;
-          const baseCcRough    = 0.08,  peakCcRough    = 0.02;
-          const baseEnv        = 1.00,  peakEnv        = 2.40;
-          mat.iridescence        = baseIrid       + (peakIrid       - baseIrid)       * k;
-          mat.dispersion         = baseDisp       + (peakDisp       - baseDisp)       * k;
-          mat.clearcoat          = baseClearcoat  + (peakClearcoat  - baseClearcoat)  * k;
-          mat.clearcoatRoughness = baseCcRough    + (peakCcRough    - baseCcRough)    * k;
-          mat.envMapIntensity    = baseEnv        + (peakEnv        - baseEnv)        * k;
-        }
-      }
       window.__lastT = t;
 
       // GYARADOS — a RIGGED sea-serpent whose ACTUAL BODY BONES conform to and
@@ -3470,8 +3339,18 @@
 
       // camera locked — frame the model + pk text dead center. we'll
       // add motion back later once the composition is right.
-      camera.position.set(modelCenter.x, modelCenter.y + 4, modelCenter.z + 55);
-      camera.lookAt(modelCenter);
+      // touch: pulled back ~15% — the whole 3D composition reads as one
+      // slightly smaller object, so the expensive per-pixel surfaces
+      // (glass transmission, model shading) cover fewer pixels AND any
+      // adaptive-quality softness is much harder to notice.
+      // CAM_X_SHIFT: on phones the bbox-centered "pk" reads optically
+      // left-of-center (the k's sparse diagonal leaves dead space on its
+      // right). Shifting camera + target left by the same amount slides
+      // the whole composition right on screen without changing the view
+      // direction.
+      camera.position.set(modelCenter.x + CAM_X_SHIFT, modelCenter.y + 4, modelCenter.z + CAM_DIST);
+      _camTarget.set(modelCenter.x + CAM_X_SHIFT, modelCenter.y, modelCenter.z);
+      camera.lookAt(_camTarget);
 
       // audio-reactive bloom — subtle pulse around base strength
       {

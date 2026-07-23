@@ -4,11 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Praneel Khiantani</title>
+  <!-- inline favicon: kills the automatic /favicon.ico 404, zero requests -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23080808'/%3E%3Ctext x='50' y='68' font-size='52' font-family='sans-serif' font-weight='800' fill='%23ffffff' text-anchor='middle'%3Epk%3C/text%3E%3C/svg%3E">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&family=Hanken+Grotesk:wght@600;700;800&family=Noto+Sans+JP:wght@700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://unpkg.com/splitting/dist/splitting.css">
+  <!-- Noto JP split into its own request with text= subsetting: the full
+       family shipped multiple CJK unicode-range slices just to render the
+       preloader's one katakana line. The subset is a few KB. -->
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&family=Hanken+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@700&text=プラニール・キアンタニ&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="vendor/splitting.css">
 
   <style>
     @property --glow-col {
@@ -339,6 +345,14 @@
       flex: 1; max-width: 420px; height: 36px; display: block;
     }
 
+    /* mobile: stack the strip — the row layout squeezed the canvas to
+       ~0px between the two nowrap labels. Column = full-width waveform,
+       centered on screen. */
+    @media (max-width: 640px) {
+      .now-playing { flex-direction: column; gap: 12px; }
+      .now-playing .np-wave { flex: none; width: min(78vw, 340px); height: 40px; }
+    }
+
     /* subtle "tap for sound" hint until first interaction */
     #sound-hint {
       position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%);
@@ -640,7 +654,6 @@
       transition: transform var(--t-emphatic) var(--ease-out), color var(--t-standard) var(--ease-out);
     }
 
-    .work-item:hover .work-name { transform: translateX(8px); }
 
     .work-meta {
       display: flex;
@@ -685,11 +698,6 @@
       white-space: nowrap;
     }
 
-    /* on hover, kill the glow so it doesn't fight the wipe-in overlay */
-    .work-item:hover .work-type {
-      text-shadow: none;
-      animation: none;
-    }
 
     /* ─── work group partition (sub-header inside the work list) ─── */
     .work-group {
@@ -733,14 +741,29 @@
       z-index: 0;
     }
 
-    .work-item:hover .work-overlay { clip-path: inset(0 0% 0 0); }
 
-    /* default hover: dark text on white */
-    .work-item:hover .work-num,
-    .work-item:hover .work-name,
-    .work-item:hover .work-year,
-    .work-item:hover .work-cats,
-    .work-item:hover .work-type { color: #000; }
+    /* ── work-item hover — POINTER DEVICES ONLY ──────────────────────
+       Scoped to @media (hover: hover): on touch, a tap/thumb-drag "sticks"
+       :hover on the row and fought the scroll-focus (.is-focus) system —
+       rows lit up under the finger instead of at viewport center. Touch
+       now runs exclusively on .is-focus; mice/trackpads keep full hover. */
+    @media (hover: hover) {
+      .work-item:hover .work-name { transform: translateX(8px); }
+      .work-item:hover .work-type { text-shadow: none; animation: none; }
+      .work-item:hover .work-overlay { clip-path: inset(0 0% 0 0); }
+      /* default hover: dark text on white */
+      .work-item:hover .work-num,
+      .work-item:hover .work-name,
+      .work-item:hover .work-year,
+      .work-item:hover .work-cats,
+      .work-item:hover .work-type { color: #000; }
+      .work-item[style]:hover::before { opacity: 0; transition: opacity var(--t-standard) var(--ease-out); }
+      .work-item[style]:hover .work-num,
+      .work-item[style]:hover .work-name,
+      .work-item[style]:hover .work-year,
+      .work-item[style]:hover .work-cats,
+      .work-item[style]:hover .work-type { color: #fff; }
+    }
 
     /* colored rows: left accent bar at rest, white text on hover */
     .work-item[style] {
@@ -766,17 +789,11 @@
       pointer-events: none;
       z-index: 0;
     }
-    .work-item[style]:hover::before { opacity: 0; transition: opacity var(--t-standard) var(--ease-out); }
     @keyframes work-bar-shimmer {
       0%, 100% { background-position: 50% 100%; opacity: 0.85; }
       50%      { background-position: 50%   0%; opacity: 1;    }
     }
 
-    .work-item[style]:hover .work-num,
-    .work-item[style]:hover .work-name,
-    .work-item[style]:hover .work-year,
-    .work-item[style]:hover .work-cats,
-    .work-item[style]:hover .work-type { color: #fff; }
 
     /* ─── marquee ─── */
     .marquee-strip {
@@ -1717,7 +1734,7 @@
 <section class="hero hero-3d">
   <iframe
     id="hero-frame"
-    src="rayquaza-flying-clean.html?v=9"
+    src="rayquaza-flying-clean.html?v=35"
     class="hero-frame"
     title="praneel · 3d hero"
     allow="autoplay; fullscreen"
@@ -1790,8 +1807,8 @@
 <!-- ── work ── -->
 <section class="work" id="work">
   <div class="work-head">
-    <span class="section-label">Selected Work</span>
-    <span class="section-label">(4)</span>
+    <span class="section-label">Internships</span>
+    <span class="section-label">(3)</span>
   </div>
 
   <div class="work-list">
@@ -1967,10 +1984,11 @@
 <!-- canvas cursor removed for performance (see IS_TOUCH override below) -->
 
 <!-- ── scripts ── -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
-<script src="https://unpkg.com/splitting/dist/splitting.min.js"></script>
-<script src="https://unpkg.com/@studio-freight/lenis@1.0.42/dist/lenis.min.js"></script>
+<!-- self-hosted (were 4 requests across 2 third-party CDNs) -->
+<script src="vendor/gsap.min.js"></script>
+<script src="vendor/ScrollTrigger.min.js"></script>
+<script src="vendor/splitting.min.js"></script>
+<script src="vendor/lenis.min.js"></script>
 
 <script>
   gsap.registerPlugin(ScrollTrigger);
@@ -2119,14 +2137,20 @@
   });
 
   gsap.from('.contact-big', {
-    scrollTrigger: { trigger: '.contact-big', start: 'top 85%' },
+    scrollTrigger: { trigger: '.contact-big', start: 'top 95%' },
     opacity: 0, y: 40, duration: .8, ease: 'power3.out'
   });
 
-  gsap.from('.contact-col', {
-    scrollTrigger: { trigger: '.contact-grid', start: 'top 88%' },
-    opacity: 0, y: 20, duration: .6, ease: 'power3.out', stagger: .1
-  });
+  // NO scroll-reveal on the contact links — twice now a scroll-position
+  // dependency left them invisible on real phones (trigger point past
+  // max-scroll, then stale trigger positions). They're the site's whole
+  // point of contact; they must render unconditionally. contact-big keeps
+  // its reveal — a failed heading animation still shows the heading area.
+
+  // trigger positions are computed at setup, before fonts/images finish —
+  // recompute once everything has real dimensions, or late-page triggers
+  // sit at stale offsets (the other half of the mobile no-render bug).
+  window.addEventListener('load', () => { try { ScrollTrigger.refresh(); } catch (e) {} });
 
   /* ─── lenis smooth scroll ─── */
   // touch devices get NATIVE scroll (smoothWheel off, no touch sync) — JS
@@ -2294,10 +2318,10 @@
         "Sold it for $10k. Stayed on as the engineering intern owning the production MVP release, CI/CD, API standards, and 150+ code reviews. The client didn't know my team had bailed until after I delivered."
       ],
       images: [
-        { src: 'TLCimgs/practice.png',        layout: 'hero',   alt: 'adaptive practice question with AI tutor sidebar', caption: 'adaptive practice · with AI tutor' },
-        { src: 'TLCimgs/practice-mobile.png', layout: 'mobile', alt: 'practice flow on mobile',                          caption: 'mobile · practice'                 },
-        { src: 'TLCimgs/dashboard.png',       layout: 'half',   alt: 'student dashboard, score progress and courses',   caption: 'dashboard · daily home'            },
-        { src: 'TLCimgs/stats.png',           layout: 'half',   alt: 'predicted score and accuracy analytics',          caption: 'analytics · predicted score'       }
+        { src: 'TLCimgs/practice.webp',        layout: 'hero',   alt: 'adaptive practice question with AI tutor sidebar', caption: 'adaptive practice · with AI tutor' },
+        { src: 'TLCimgs/practice-mobile.webp', layout: 'mobile', alt: 'practice flow on mobile',                          caption: 'mobile · practice'                 },
+        { src: 'TLCimgs/dashboard.webp',       layout: 'half',   alt: 'student dashboard, score progress and courses',   caption: 'dashboard · daily home'            },
+        { src: 'TLCimgs/stats.webp',           layout: 'half',   alt: 'predicted score and accuracy analytics',          caption: 'analytics · predicted score'       }
       ],
       tags: ['Next.js', 'TypeScript', 'Tailwind', 'FastAPI', 'Python', 'Postgres', 'Supabase', 'SQLAlchemy', 'Clerk', 'PostHog', 'Sentry'],
       meta: {
@@ -2324,11 +2348,11 @@
       ],
       note: "The actual build is under NDA. The mockup shown is a stylized recreation of what I made. The other shots are public marketing material from the parent product family (Career Assistant, Indeed PLUS, and the American Career Navigator).",
       images: [
-        { src: 'indeed/mockup.png',        alt: 'career navigator dashboard mockup', caption: 'mockup · my build'      },
-        { src: 'indeed/logo.png',          layout: 'third',  alt: 'career assistant logo',     caption: 'career assistant · logo' },
-        { src: 'indeed/plus-promo.png',    layout: 'banner', alt: 'indeed plus promo, jp',     caption: 'indeed plus · jp promo'  },
-        { src: 'indeed/navigator-us.png',  layout: 'half',   alt: 'career navigator, us',      caption: 'career navigator · us'   },
-        { src: 'indeed/assistant-app.png', layout: 'half',   alt: 'career assistant on phone', caption: 'career assistant · app'  }
+        { src: 'indeed/mockup.webp',        alt: 'career navigator dashboard mockup', caption: 'mockup · my build'      },
+        { src: 'indeed/logo.webp',          layout: 'third',  alt: 'career assistant logo',     caption: 'career assistant · logo' },
+        { src: 'indeed/plus-promo.webp',    layout: 'banner', alt: 'indeed plus promo, jp',     caption: 'indeed plus · jp promo'  },
+        { src: 'indeed/navigator-us.webp',  layout: 'half',   alt: 'career navigator, us',      caption: 'career navigator · us'   },
+        { src: 'indeed/assistant-app.webp', layout: 'half',   alt: 'career assistant on phone', caption: 'career assistant · app'  }
       ],
       tags: ['Python', 'Neo4j', 'Cypher', 'React', 'OpenAI API', 'Gemini API', 'REST'],
       meta: {
@@ -2352,10 +2376,10 @@
         'Redis caches vehicle positions on a 2-second TTL. P95 latency went from 30 seconds to under 5. 1,000+ active users. One of the heads of Harvard\'s CS department uses it. Live at <a href="https://shuttl.live" target="_blank" rel="noopener noreferrer">shuttl.live</a>.'
       ],
       images: [
-        { src: 'shuttlimages/desktop.png',  layout: 'hero',   alt: 'shuttl desktop, loaded in',    caption: 'desktop · loaded in' },
-        { src: 'shuttlimages/mobile.png',   layout: 'mobile', alt: 'shuttl mobile, trip planned',  caption: 'mobile · trip set'   },
-        { src: 'shuttlimages/selector.png', layout: 'tall',   alt: 'route selector panel',         caption: 'routes'              },
-        { src: 'shuttlimages/trip.png',     layout: 'wide',   alt: 'trip plan between two stops',  caption: 'point a to point b'  }
+        { src: 'shuttlimages/desktop.webp',  layout: 'hero',   alt: 'shuttl desktop, loaded in',    caption: 'desktop · loaded in' },
+        { src: 'shuttlimages/mobile.webp',   layout: 'mobile', alt: 'shuttl mobile, trip planned',  caption: 'mobile · trip set'   },
+        { src: 'shuttlimages/selector.webp', layout: 'tall',   alt: 'route selector panel',         caption: 'routes'              },
+        { src: 'shuttlimages/trip.webp',     layout: 'wide',   alt: 'trip plan between two stops',  caption: 'point a to point b'  }
       ],
       tags: ['Python', 'FastAPI', 'Redis', 'React', 'TypeScript', 'Leaflet', 'Tailwind', 'Docker', 'GTFS', 'PassioGO API'],
       meta: {
@@ -2771,9 +2795,12 @@
   const USE_TERMINAL_HOVER = true;
   const IS_TOUCH = window.matchMedia('(hover: none), (pointer: coarse)').matches;
 
-  if (USE_TERMINAL_HOVER) {
+  // DESKTOP ONLY. The touch version (scroll-driven focus + a second WebGL
+  // context on top of the hero) was measurably laggy on phones — the whole
+  // feature is now skipped there: no ogl fetch, no canvas, no scroll work.
+  if (USE_TERMINAL_HOVER && !IS_TOUCH) {
     const { Renderer, Program, Mesh, Color, Triangle } =
-      await import('https://esm.sh/ogl@1.0.11');
+      await import('./vendor/ogl.bundle.min.js');
 
     const vertexShader = /* glsl */`
       attribute vec2 position;
@@ -3007,42 +3034,12 @@
 
     const items = document.querySelectorAll('.work-item[data-slug]');
 
-    if (!IS_TOUCH) {
-      // desktop: hover drives the terminal activation
-      items.forEach(item => {
-        item.addEventListener('mouseenter', () => activate(item));
-        item.addEventListener('mouseleave', () => deactivate(item));
-      });
-    } else {
-      // touch: scroll drives it — the row nearest viewport-center gets the
-      // terminal (rendered at DPR 1 so it stays smooth). Same .is-focus
-      // class so the wipe + text inversion fire too.
-      const list = [...items];
-      let focusEl = null, scrollRaf = 0;
-      function pickFocus() {
-        const cy = window.innerHeight * 0.55, band = window.innerHeight * 0.6;
-        let best = null, bestD = Infinity;
-        for (const it of list) {
-          const r = it.getBoundingClientRect();
-          if (r.bottom < 0 || r.top > window.innerHeight) continue;
-          const d = Math.abs((r.top + r.bottom) / 2 - cy);
-          if (d < bestD) { bestD = d; best = it; }
-        }
-        return bestD < band ? best : null;
-      }
-      function updateFocus() {
-        scrollRaf = 0;
-        const next = pickFocus();
-        if (next === focusEl) return;
-        if (focusEl) { focusEl.classList.remove('is-focus'); deactivate(focusEl); }
-        focusEl = next;
-        if (focusEl) { focusEl.classList.add('is-focus'); activate(focusEl); }
-      }
-      const onScroll = () => { if (!scrollRaf) scrollRaf = requestAnimationFrame(updateFocus); };
-      window.addEventListener('scroll', onScroll, { passive: true });
-      window.addEventListener('resize', () => { onScroll(); resizeToCurrent(); });
-      requestAnimationFrame(updateFocus);
-    }
+    // hover drives the terminal activation (this whole block is desktop-only
+    // now — the touch scroll-focus variant was removed for performance)
+    items.forEach(item => {
+      item.addEventListener('mouseenter', () => activate(item));
+      item.addEventListener('mouseleave', () => deactivate(item));
+    });
 
     window.addEventListener('resize', resizeToCurrent);
   }
@@ -3240,14 +3237,21 @@
     }
 
     // iOS unlock: everything synchronous inside the gesture.
+    // BUGFIX: on touch, buildGraph() intentionally creates NO AudioContext
+    // (see AUDIO_TOUCH above) — but this function then dereferenced
+    // audioCtx.state, threw inside the try, and skipped audio.play()
+    // entirely. Result: tapping the page/player never started the music on
+    // phones. The context steps are now guarded so play() always runs.
     function unlock() {
       try {
         buildGraph();
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        // 1-sample silent buffer fully unlocks the context on iOS
-        const b = audioCtx.createBuffer(1, 1, 22050);
-        const s = audioCtx.createBufferSource();
-        s.buffer = b; s.connect(audioCtx.destination); s.start(0);
+        if (audioCtx) {
+          if (audioCtx.state === 'suspended') audioCtx.resume();
+          // 1-sample silent buffer fully unlocks the context on iOS
+          const b = audioCtx.createBuffer(1, 1, 22050);
+          const s = audioCtx.createBufferSource();
+          s.buffer = b; s.connect(audioCtx.destination); s.start(0);
+        }
         audio.play().then(() => { started = true; refreshIcons(); }).catch(() => {});
       } catch (e) { /* ignore */ }
       dismissHint();
@@ -3308,10 +3312,24 @@
       }
     }
 
-    /* feed amplitude into the hero iframe + draw waveform every frame */
+    /* feed amplitude into the hero iframe + draw waveform every frame.
+       Gated when nothing is playing: before the first user gesture (and
+       whenever paused) this loop was doing analyser reads + canvas draws +
+       cross-frame writes at 60fps for a silent page. Paused → one wave
+       clear, zero per-frame work. */
+    let waveCleared = false;
     function pumpAmp() {
       requestAnimationFrame(pumpAmp);
       if (!ready) return;
+      if (audio.paused) {
+        if (!waveCleared) {
+          waveCleared = true;
+          if (waveCtx) waveCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+          if (frame && frame.contentWindow) { try { frame.contentWindow.__heroAmp = 0; } catch (e) {} }
+        }
+        return;
+      }
+      waveCleared = false;
       let amp;
       if (analyser) {
         analyser.getByteFrequencyData(bytes);
