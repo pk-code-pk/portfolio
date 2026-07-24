@@ -1182,10 +1182,12 @@
     // HDR cost that chokes weaker mobile GPUs.)
     // 2x MSAA on desktop: at DPR=2 each logical pixel maps to 4 physical pixels
     // (natural SSAA), so 2x MSAA = 8x effective AA — clean edges, half the cost of 4x.
-    // desktop 4 / touch 2: at native DPR-3 on phones, geometric edges are
-    // fine enough that 2x MSAA finishes them; 4x doubled HDR-target
-    // bandwidth for no visible gain at that pixel density (the lag).
-    const MSAA = TOUCH_DEVICE ? 2 : 4;
+    // 4x everywhere. MSAA resolves on-tile on mobile GPUs, so the cost is
+    // far lower there than its desktop reputation suggests — and the thin
+    // fins / letter edges are exactly the sub-pixel geometry that 2x leaves
+    // ragged. If a weak phone struggles, the adaptive valve below trims the
+    // transmission buffer rather than giving these edges back.
+    const MSAA = 4;
     composer.renderTarget1.samples = MSAA;
     composer.renderTarget2.samples = MSAA;
     composer.renderTarget1.texture.type = THREE.HalfFloatType;
@@ -1607,6 +1609,7 @@
     let model       = null;
     let bodyChain   = [];   // ordered head → spine → tail, full chain
     let jaw         = null;
+    let tailTip     = null;   // terminal tail bone (not in the driven chain)
     let arms        = { L: [], R: [] };
     let modelCenter = new THREE.Vector3();
 
@@ -1751,8 +1754,16 @@
         arms.L = arms_L;
         arms.R = arms_R;
 
+        // the terminal tail bone is deliberately EXCLUDED from the driven
+        // chain (the `_end_` filter), so nothing ever rotated it — the last
+        // segment of the tail was a rigid spike that translated with the
+        // body but never flexed. Grab it so it can be given a trailing flick.
+        model.traverse(o => {
+          if (o.isBone && /^Tail\d+_.*_end_/.test(o.name)) tailTip = o;
+        });
+
         // snapshot rest rotations so animations are additive offsets
-        [...bodyChain, jaw, ...arms.L, ...arms.R].filter(Boolean).forEach(b => {
+        [...bodyChain, jaw, tailTip, ...arms.L, ...arms.R].filter(Boolean).forEach(b => {
           b.userData.rest = { x: b.rotation.x, y: b.rotation.y, z: b.rotation.z };
         });
 
@@ -3291,6 +3302,26 @@
           model.position.set(idlePX, idlePY, idlePZ);
           model.rotation.set(idleRX, idleRY, idleRZ);
           _rqActive = false;   // next takeoff re-primes the smoothed pose
+        }
+
+        /* ── TAIL-TIP FLICK ────────────────────────────────────────────
+           The terminal bone sits past the end of the driven chain, so the
+           very tip never articulated — it swung with the body but stayed
+           dead straight, which read as "the tip is stuck". Here it gets a
+           whip of its own: the same travelling wave as the body, sampled
+           one notch further along the chain and delayed in time, so it
+           TRAILS the segment ahead of it and snaps through the turnaround
+           rather than moving in lockstep. Amplitude is modest at rest and
+           opens up in flight. Applied after the pose above, so it layers
+           on top of whichever system is driving the body. */
+        if (tailTip && tailTip.userData.rest) {
+          const rest  = tailTip.userData.rest;
+          const lagPh = omega * (t - 0.26) - k * (N + 1.3);
+          const whip  = Math.sin(lagPh) * 0.62 + Math.sin(lagPh * 1.9 + 0.7) * 0.3;
+          const amt   = 0.34 * (0.5 + 0.5 * rqBlend);
+          tailTip.rotation.x = rest.x + whip * amt * 0.55;
+          tailTip.rotation.y = rest.y + whip * amt;
+          tailTip.rotation.z = rest.z + Math.sin(lagPh * 0.75 + 1.1) * amt * 0.45;
         }
 
         /* ── BALLISTIC SCREECH ──────────────────────────────────────
