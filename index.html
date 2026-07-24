@@ -7,6 +7,74 @@
   <!-- inline favicon: kills the automatic /favicon.ico 404, zero requests -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23080808'/%3E%3Ctext x='50' y='68' font-size='52' font-family='sans-serif' font-weight='800' fill='%23ffffff' text-anchor='middle'%3Epk%3C/text%3E%3C/svg%3E">
 
+  <!-- ── CRITICAL CSS ───────────────────────────────────────────────────
+       The main stylesheet is a single ~1700-line inline <style>, and a
+       browser applies NOTHING from a <style> block until it has parsed the
+       whole thing. On a slow link the document is still streaming for
+       seconds, so the page was rendering completely UNSTYLED — including
+       the hero poster. This tiny block sits in the first ~1KB so the
+       preloader and the hero read correctly almost immediately. Every rule
+       here is duplicated verbatim further down; this is purely about
+       arrival time, not about overriding anything. -->
+  <style>
+    :root { --bg:#080808; --fg:#fff; --nav-h:54px; }
+    *,*::before,*::after { margin:0; padding:0; box-sizing:border-box; }
+    html { overflow-x:hidden; }
+    body { background:var(--bg); color:var(--fg); font-family:'DM Sans',sans-serif; overflow-x:hidden; max-width:100vw; }
+    #preloader { position:fixed; inset:0; background:#000; z-index:900;
+                 display:flex; flex-direction:column; align-items:center;
+                 justify-content:center; gap:28px; }
+    .pre-name { font-family:'Hanken Grotesk',sans-serif; font-size:clamp(1.8rem,4vw,3rem);
+                font-weight:600; letter-spacing:-.02em; text-transform:lowercase; color:#fff; }
+    .pre-jp-wrap { position:relative; margin-top:10px; display:inline-block; }
+    .pre-jp-base { font-size:clamp(1rem,1.8vw,1.4rem); font-weight:700;
+                   letter-spacing:.06em; color:rgba(255,255,255,.18); }
+    .hero.hero-3d { position:relative; width:100%; height:100svh; min-height:100svh;
+               overflow:hidden;
+               background:#000 url('hero-poster.webp') center center / cover no-repeat; }
+    @media (max-width:640px){ .hero.hero-3d { background-image:url('hero-poster-mobile.webp'); } }
+    .hero-3d .hero-frame { position:absolute; inset:0; width:100%; height:100%;
+                           border:0; display:block; opacity:0;
+                           transition:opacity .55s ease; }
+    .hero-3d.is-live .hero-frame { opacity:1; }
+    nav { position:fixed; top:0; left:0; right:0; height:var(--nav-h); z-index:100; }
+  </style>
+
+  <!-- ── preloader control, dependency-free ────────────────────────────
+       This used to live at the END of <body>, AFTER the GSAP/ScrollTrigger
+       script tags — so on a slow link the black preloader was held hostage
+       until ~113KB of animation libraries finished downloading (measured:
+       15s+ on 400kbps). Dismissal is pure CSS + setTimeout here in <head>,
+       so it runs the moment the document parses, independent of every
+       library. The hero poster underneath means dismissing early shows a
+       correct-looking hero rather than a blank one. -->
+  <script>
+    (function () {
+      function dismiss() {
+        var p = document.getElementById('preloader');
+        if (!p || p.dataset.gone) return;
+        p.dataset.gone = '1';
+        p.style.transition = 'opacity .6s ease';
+        p.style.opacity = '0';
+        setTimeout(function () {
+          p.style.display = 'none';
+          p.style.pointerEvents = 'none';
+        }, 650);
+      }
+      window.__dismissPreloader = dismiss;
+      // the live WebGL scene reporting in → crossfade it over the poster
+      window.addEventListener('message', function (e) {
+        if (e.data && e.data.__heroReady) {
+          var h = document.querySelector('.hero-3d');
+          if (h) h.classList.add('is-live');
+          dismiss();
+        }
+      });
+      // hard cap — the poster carries the hero from here
+      setTimeout(dismiss, 2600);
+    })();
+  </script>
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <!-- Noto JP split into its own request with text= subsetting: the full
@@ -15,6 +83,12 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&family=Hanken+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@700&text=プラニール・キアンタニ&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="vendor/splitting.css">
+  <!-- hero poster: a still frame of the real 3D scene. It paints in ~16KB,
+       long before the 700KB three.js bundle + 480KB model can arrive, so the
+       hero LOOKS right immediately on slow connections (and stays right if
+       WebGL never initialises at all). -->
+  <link rel="preload" as="image" href="hero-poster.webp" media="(min-width: 641px)">
+  <link rel="preload" as="image" href="hero-poster-mobile.webp" media="(max-width: 640px)">
 
   <style>
     @property --glow-col {
@@ -230,14 +304,24 @@
     @keyframes blink { 50% { opacity: 0; } }
 
     /* ─── 3d hero (rayquaza scene iframe) ─── */
-    .hero-3d {
+    /* .hero.hero-3d (not just .hero-3d): the section carries BOTH classes,
+       and the plain `.hero` rule below declares `background: #080808` — a
+       shorthand, so it was resetting background-image to none. Matching on
+       both classes outranks it. */
+    .hero.hero-3d {
       position: relative;
       width: 100%;
       height: 100svh;
       min-height: 100svh;
       overflow: hidden;
-      background: #000;
+      background: #000 url('hero-poster.webp') center center / cover no-repeat;
     }
+    @media (max-width: 640px) {
+      .hero.hero-3d { background-image: url('hero-poster-mobile.webp'); }
+    }
+    /* the live scene crossfades over the poster once it signals ready */
+    .hero-3d .hero-frame { opacity: 0; transition: opacity .55s ease; }
+    .hero-3d.is-live .hero-frame { opacity: 1; }
     .hero-3d .hero-frame {
       position: absolute;
       inset: 0;
@@ -1734,7 +1818,7 @@
 <section class="hero hero-3d">
   <iframe
     id="hero-frame"
-    src="rayquaza-flying-clean.html?v=35"
+    src="rayquaza-flying-clean.html?v=61"
     class="hero-frame"
     title="praneel · 3d hero"
     allow="autoplay; fullscreen"
@@ -2055,7 +2139,13 @@
 
   // hero → parent readiness handshake
   window.addEventListener('message', (e) => {
-    if (e.data && e.data.__heroReady) { heroReady = true; maybeStart(); }
+    if (e.data && e.data.__heroReady) {
+      heroReady = true;
+      // crossfade the real scene in over the poster
+      const h3d = document.querySelector('.hero-3d');
+      if (h3d) h3d.classList.add('is-live');
+      maybeStart();
+    }
   });
 
   setTimeout(() => {
@@ -2071,7 +2161,11 @@
   // never reports ready (WebGL failure / slow phone). 8s keeps a slow phone
   // from staring at "loading" indefinitely while still giving the hero a fair
   // chance to signal first.
-  setTimeout(() => { introDone = true; heroReady = true; startSite(); }, 8000);
+  // 8000 → 3500: with the poster painting the hero correctly from the
+  // start, holding a black preloader waiting for WebGL is pure lost time.
+  // Previously this fired at 8s and revealed an EMPTY hero on slow links
+  // (measured: on 400kbps the 3D bundle hadn't even begun downloading).
+  setTimeout(() => { introDone = true; heroReady = true; startSite(); }, 3500);
 
   /* ─── Splitting.js ─── */
   // Rewrite the hero title for narrow viewports BEFORE Splitting runs.
@@ -3202,8 +3296,11 @@
        cry plays through the already-unlocked AudioContext (decoded buffer)
        so it fires instantly with no gesture-timing issues; falls back to a
        plain <audio> if the context isn't up yet. */
+    // preload='none': the cry is only needed after someone taps Rayquaza,
+    // but preload='auto' was downloading it during initial page load where
+    // it competed with the hero's model + bundle for bandwidth.
     const cryAudio = new Audio('sfx/rayquaza-cry.mp3');
-    cryAudio.preload = 'auto';
+    cryAudio.preload = 'none';
     let cryBuffer = null, cryFetching = false;
     function ensureCryBuffer() {
       if (cryBuffer || cryFetching || !audioCtx) return;
