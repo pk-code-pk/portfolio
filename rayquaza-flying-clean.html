@@ -5,7 +5,7 @@
   <title>rayquaza · flying (clean)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <!-- kick off the heavy same-origin fetches before script parse -->
-  <link rel="modulepreload" href="vendor/three.bundle.min.js?v=2">
+  <link rel="modulepreload" href="vendor/three.bundle.min.js?v=5">
   <link rel="preload" href="rayquaza/rayquaza.glb" as="fetch" crossorigin="anonymous">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -337,10 +337,9 @@
     // fetch, no CDN round-trips, huge win on mobile RTT.
     import {
       THREE, GLTFLoader, FontLoader, TextGeometry,
-      Lensflare, LensflareElement,
-      EffectComposer, RenderPass, UnrealBloomPass, OutputPass,
+      EffectComposer, RenderPass, UnrealBloomPass, OutputPass, ShaderPass,
       toCreasedNormals
-    } from './vendor/three.bundle.min.js?v=2';
+    } from './vendor/three.bundle.min.js?v=5';
 
     const canvas = document.getElementById('c');
     const status = document.getElementById('status');
@@ -635,10 +634,17 @@
 
             // warm sun highlight at +x/+y direction (gives the chrome a
             // strong directional gleam to bounce)
+            // exponent 28 → 10: the old hotspot was only a few texels wide
+            // in the ~256px PMREM cube face, so mirror-smooth areas of the
+            // model reflected raw texels — the "pixely glints". A broader
+            // lobe (plus the higher PMREM blur below) samples smooth
+            // gradients; same directional gleam, no texel crawl.
             vec3 sunDir = normalize(vec3(0.6, 0.55, 0.35));
             float s = max(0.0, dot(vDir, sunDir));
-            col += pow(s, 28.0) * vec3(1.8, 1.4, 0.9);     // tight bright spot
-            col += pow(s, 4.0)  * vec3(0.35, 0.25, 0.15);  // soft falloff
+            // cooled to moonlight (was warm sun) so the chrome reflects the
+            // same source the sky and the glass now show
+            col += pow(s, 10.0) * vec3(1.00, 1.12, 1.35);  // bright lobe (broadened)
+            col += pow(s, 4.0)  * vec3(0.22, 0.26, 0.36);  // soft falloff
 
             // cool rim highlight from opposite (subtle blue rim on the dark side)
             vec3 rimDir = normalize(vec3(-0.55, 0.15, -0.6));
@@ -651,7 +657,9 @@
       envScene.add(new THREE.Mesh(envGeo, envMat));
       const pmrem = new THREE.PMREMGenerator(renderer);
       pmrem.compileEquirectangularShader();
-      scene.environment = pmrem.fromScene(envScene, 0.06).texture;
+      // blur sigma 0.06 → 0.12: pre-smooths the env before mipping so
+      // low-roughness surfaces can't pick up individual texels.
+      scene.environment = pmrem.fromScene(envScene, 0.12).texture;
     }
 
     /* ── lights ───────────────────────────────────────────────────── */
@@ -665,31 +673,9 @@
     const ambLight = new THREE.AmbientLight(0x4060a0, 0.15);
     scene.add(ambLight);
 
-    /* ── visible sun + lens flare ─────────────────────────────────── */
-    // PointLight here is just an anchor for the lensflare sprite — its
-    // intensity is 0 because the actual scene illumination is already
-    // handled by the directional + ambient + env map above. The flare
-    // sits far along the env's sun direction so the reflection cue on
-    // the chrome lines up with the visible source.
-    {
-      const sunDir = new THREE.Vector3(0.6, 0.55, 0.35).normalize();
-      const sunAnchor = new THREE.PointLight(0xfff0d8, 0, 0);
-      sunAnchor.position.copy(sunDir).multiplyScalar(900);
-      scene.add(sunAnchor);
-
-      // self-hosted (were fetched from the three.js gh repo via jsdelivr)
-      const texLoader = new THREE.TextureLoader().setPath('vendor/');
-      const flare0 = texLoader.load('lensflare0.png');
-      const flare3 = texLoader.load('lensflare3.png');
-
-      const lf = new Lensflare();
-      lf.addElement(new LensflareElement(flare0, 680, 0,   new THREE.Color(0xffe2b0)));
-      lf.addElement(new LensflareElement(flare3,  60, 0.6));
-      lf.addElement(new LensflareElement(flare3,  90, 0.7));
-      lf.addElement(new LensflareElement(flare3, 140, 0.9));
-      lf.addElement(new LensflareElement(flare3,  70, 1.0));
-      sunAnchor.add(lf);
-    }
+    /* Light direction for the glass specular highlights. (A visible moon
+       sprite lived here and was cut — the light it motivated stays.) */
+    const MOON_DIR = new THREE.Vector3(0.10, 0.21, -0.97).normalize();
 
     /* ── audio amplitude source ──────────────────────────────────────
        When this page is EMBEDDED inside index.html (the live hero), the
@@ -1215,9 +1201,9 @@
     // nebula; the relief valve (transmission) covers weak GPUs.
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      0.55,   // strength
-      0.40,   // radius
-      1.05    // threshold (only HDR-ish brights pass)
+      0.62,   // strength — a touch richer
+      0.58,   // radius — wider, softer falloff (glow breathes instead of ringing)
+      0.98    // threshold — slightly lower so the neon rims + glints bloom gently
     );
     composer.addPass(bloomPass);
 
@@ -1227,6 +1213,24 @@
     // OutputPass applies ACES Filmic at the END so bloom is computed in
     // linear and only tone-mapped once.
     composer.addPass(new OutputPass());
+
+    // ── final dither ── the bloom's big soft gradients quantize to visible
+    // stepped rings ("banding") on 8-bit screens — the boxy contours around
+    // the glow. ±0.6 LSB of per-pixel noise is itself invisible but breaks
+    // the rings into smooth-looking gradients. Runs after tone mapping so
+    // it dithers the actual output levels.
+    composer.addPass(new ShaderPass({
+      uniforms: { tDiffuse: { value: null } },
+      vertexShader: `varying vec2 vUv;
+        void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+      fragmentShader: `
+        uniform sampler2D tDiffuse; varying vec2 vUv;
+        float dh(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        void main(){
+          vec4 c = texture2D(tDiffuse, vUv);
+          gl_FragColor = vec4(c.rgb + (dh(gl_FragCoord.xy) - 0.5) * (1.2 / 255.0), c.a);
+        }`
+    }));
 
     /* ── camera curve (flies around the model) ────────────────────── */
     // closed loop around the origin: sweeps wide → close pass → climbs → drops
@@ -1260,7 +1264,9 @@
     // world-space direction toward the sun/lensflare anchor (set below once
     // the flare is created) — shared so the pk glass can catch a matching
     // sun-glint on its edges as the model turns through the light.
-    const pkSun = { uSunDir: { value: new THREE.Vector3(0.6, 0.55, 0.35).normalize() } };
+    // must match the moon anchor's direction above so the glass catches the
+    // moon you can actually SEE in the sky
+    const pkSun = { uSunDir: { value: MOON_DIR.clone() } };
     function installWetGlass(mat) {
       // Per-letter droplet effect: drops bead and roll down ONLY the glass
       // "pk" letters (object-space), refracting/beading on the surface. The
@@ -1281,16 +1287,22 @@
         shader.vertexShader = shader.vertexShader.replace(
           '#include <common>',
           `#include <common>
-           varying vec3 vWetPos;`
+           varying vec3 vWetPos;
+           varying vec3 vObjNrm;`
         ).replace(
           '#include <begin_vertex>',
           `#include <begin_vertex>
            vWetPos = position;`
+        ).replace(
+          '#include <beginnormal_vertex>',
+          `#include <beginnormal_vertex>
+           vObjNrm = objectNormal;`
         );
         shader.fragmentShader = shader.fragmentShader.replace(
           '#include <common>',
           `#include <common>
            varying vec3 vWetPos;
+           varying vec3 vObjNrm;
            uniform float uWet;
            uniform float uTime;
            uniform float uPulse;   // 0..1 music amplitude — pulses the blue glow
@@ -1402,7 +1414,28 @@
         shader.fragmentShader = shader.fragmentShader.replace(
           '#include <roughnessmap_fragment>',
           `#include <roughnessmap_fragment>
-           roughnessFactor = mix(roughnessFactor, roughnessFactor * 0.18, uWet * wetMask);`
+           roughnessFactor = mix(roughnessFactor, roughnessFactor * 0.18, uWet * wetMask);
+           // ── FROSTED FACES, POLISHED BEVELS (rayquaza only) ──────────
+           // The letters extrude along object Z, so |objectNormal.z|
+           // separates the flat faces (~1) from bevels and side walls (~0).
+           // Frost ONLY the faces: roughness there scatters the transmitted
+           // image, so Rayquaza reads as a soft shape THROUGH sandblasted
+           // glass while the chamfered edges stay mirror-polished and catch
+           // hard highlights. This is a material property — the faces
+           // diffuse light rather than having light added on top — so it
+           // reads as etched glass, not haze.
+           {
+             float faceness = abs(normalize(vObjNrm).z);
+             float frost    = smoothstep(0.60, 0.95, faceness) * (1.0 - uWet);
+             float grain    = 0.86 + 0.14 * fract(sin(dot(floor(vWetPos.xy * 220.0),
+                                                          vec2(127.1, 311.7))) * 43758.5453);
+             // 0.46 → 0.30: lighter etch. Roughness drives how much the
+             // transmitted image scatters, so this is literally the
+             // see-through dial — less frost, more of Rayquaza reads
+             // through the faces while they still look sandblasted.
+             roughnessFactor = mix(roughnessFactor, 0.30 * grain, frost);
+           }
+`
         );
         shader.fragmentShader = shader.fragmentShader.replace(
           '#include <dithering_fragment>',
@@ -1424,22 +1457,38 @@
              vec3 evd = normalize(vViewPosition);
              vec3 en  = normalize(normal);
              float efres = pow(1.0 - clamp(dot(en, evd), 0.0, 1.0), 2.2);
-             // kept LOW on purpose: anything stronger feeds the bloom pass
-             // and wraps the letterforms in a soft halo — which reads as
-             // "blurry/not crispy". Edge definition should come from the
-             // sharp bevel specular, not glow.
-             gl_FragColor.rgb += vec3(1.0) * efres * 0.18 * rayGlow;
-             gl_FragColor.rgb += vec3(0.45, 0.62, 1.0) * efres * (0.09 + uPulse * 0.10) * rayGlow;
+             // edge light — halfway point between the too-subtle and the
+             // rejected halo-heavy versions: brighter than before but with
+             // a tighter falloff (2.8 vs 2.2) so light hugs the rim and the
+             // faces stay clear glass. With the lowered bloom threshold the
+             // edges pick up a gentle luminance — glow without fog.
+             float efres2 = pow(1.0 - clamp(dot(en, evd), 0.0, 1.0), 2.8);
+             // dialled well back (0.30 → 0.12): the rims were reading as
+             // glowing white outlines rather than glass edges catching light
+             gl_FragColor.rgb += vec3(1.0) * efres2 * 0.12 * rayGlow;
+             gl_FragColor.rgb += vec3(0.45, 0.62, 1.0) * efres2 * (0.07 + uPulse * 0.08) * rayGlow;
              // sun glint on the edges — same warm tone as the lensflare
              // sprite, so when the flare direction lines up with a letter
              // edge it looks like the flare is catching/lighting that
              // edge, not just an isolated screen-space sprite floating
              // past. Tight specular lobe from the sun reflection, gated
              // by the same edge fresnel so it hugs the letterforms.
-             vec3 sunDirView = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
-             vec3 reflDir    = reflect(-sunDirView, en);
-             float glint = pow(clamp(dot(reflDir, evd), 0.0, 1.0), 24.0);
-             gl_FragColor.rgb += vec3(1.0, 0.89, 0.69) * glint * (0.6 + efres * 1.4) * rayGlow;
+             // ── MOONLIGHT ON THE GLASS ──────────────────────────────────
+             // Three stacked specular lobes off the moon's direction, the
+             // standard way a hard point source reads on a polished
+             // dielectric: a crisp mirrored disc, a soft bloom around it,
+             // and a wide grazing sheen. All are specular/edge terms — none
+             // washes the faces, so the glass stays clear.
+             vec3 moonDirView = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
+             vec3 reflDir     = reflect(-moonDirView, en);
+             float mdot = clamp(dot(reflDir, evd), 0.0, 1.0);
+             // 1) the moon's mirror image sliding across the surface
+             gl_FragColor.rgb += vec3(0.88, 0.93, 1.0) * pow(mdot, 90.0) * 1.7 * rayGlow;
+             // 2) soft moonlit bloom around that highlight
+             gl_FragColor.rgb += vec3(0.62, 0.75, 1.0) * pow(mdot, 14.0) * 0.50 * rayGlow;
+             // 3) cool sheen where moonlight grazes the letterforms — gated
+             //    by the edge fresnel so it hugs the rims, never the faces
+             gl_FragColor.rgb += vec3(0.55, 0.70, 1.0) * efres2 * pow(mdot, 2.0) * 0.22 * rayGlow;
 
 
            }
@@ -1477,10 +1526,13 @@
           // very small bevel — just enough to soften the sharp corner
           // and pick up a hairline highlight, not enough to read as a
           // chunky rounded edge.
-          bevelThickness: 0.06,
-          bevelSize: 0.025,
+          // enlarged from 0.06/0.025: the polished bevel is now a feature —
+          // it has to be wide enough to catch a highlight against the
+          // frosted faces
+          bevelThickness: 0.22,
+          bevelSize: 0.11,
           bevelOffset: 0,
-          bevelSegments: 6
+          bevelSegments: 5
         });
         geo.computeBoundingBox();
         geo.center();
@@ -1506,20 +1558,31 @@
         const mat = new THREE.MeshPhysicalMaterial({
           color:               0xffffff,
           metalness:           0.0,
-          roughness:           0.06,
+          roughness:           0.04,          // extra polish (was .06)
           transmission:        1.0,
-          thickness:           1.4,
-          ior:                 1.5,
-          envMapIntensity:     1.0,
-          clearcoat:           0.5,
-          clearcoatRoughness:  0.08,
+          thickness:           2.6,           // thicker slab = longer optical path,
+                                              // which is what makes dispersion
+                                              // actually separate into colour
+          ior:                 1.62,          // denser glass, stronger bending
+          envMapIntensity:     1.6,           // stronger mirror component = reads glassier
+          clearcoat:           1.0,           // full wet-glass top coat
+          clearcoatRoughness:  0.04,
           attenuationColor:    new THREE.Color(0xeef4ff),
           attenuationDistance: 12.0,
-          // dial iridescence down to a whisper
-          iridescence:                  0.25,
-          iridescenceIOR:               1.3,
-          iridescenceThicknessRange:    [120, 420],
-          dispersion: 0.2,
+          // thin-film interference on the SURFACE — soft rainbow sheen that
+          // shifts with viewing angle, on the faces themselves
+          // THIN-FILM INTERFERENCE — a real, r160-supported surface effect:
+          // an oil-slick rainbow that lives ON the glass and shifts as the
+          // view angle changes. Pushed to full so it actually reads.
+          iridescence:                  0.45,
+          iridescenceIOR:               1.5,
+          iridescenceThicknessRange:    [220, 780],
+          // NOTE: `dispersion` is NOT supported on three r160 (it landed in
+          // a later release) — setting it here was silently ignored, which
+          // is why the prism idea showed nothing. Upgrading to r185 enables
+          // it but blows the transmissive glass out to solid white, so the
+          // renderer stays pinned. The surface rainbow below is the
+          // supported route to the same feel.
           transparent: true,
           side: THREE.DoubleSide,
           // dithering breaks up banding in the soft glow/fresnel gradients —
@@ -1601,6 +1664,7 @@
         // SkinnedMesh's actual rendered bounding box from its geometry
         // and bone matrices, and aim the camera at that center.
         scene.add(model);
+        window.__model = model;   // debug handle
         model.updateMatrixWorld(true);
 
         // sample bone world positions to discover where the model is
@@ -1802,13 +1866,21 @@
           // its height (Y harmonic) so it reads as a dragon banking through the
           // air. Sized so curveLength ≈ 2.2× bodyArc → body fills ~45% of the
           // loop: head clearly LEADS, tail clearly TRAILS on the same track.
+          // The letters are SOLID, so the path must wrap around them rather
+          // than pass through. The trick is phase-locking Z to X:
+          //   x = cos(th)  → |x| is LARGEST at th = 0, π  (out past the ends)
+          //   z = sin(th)  → |z| is LARGEST at th = π/2, 3π/2 (mid-span)
+          // so the body is at full depth (clear in front / clear behind)
+          // exactly while it crosses the letters' span, and only changes
+          // side when it is out beyond their left/right ends. That reads as
+          // slithering AROUND a solid object. The old z had a +1.1 phase
+          // offset, which put z≈0 mid-span — straight through the glass.
+          // The 2*th harmonic is zero at all four of those key angles, so
+          // it adds asymmetry without weakening the clearance.
           const baseShape = (th) => new THREE.Vector3(
             Math.cos(th) * 1.35,                                   // wide X orbit
             0.60 * Math.sin(th) + 0.16 * Math.sin(2*th + 0.5),     // ellipse + teardrop
-            // depth weave — amplitude raised 0.55 → 0.95 (same phase, same
-            // lobes): identical orbit, it just travels far enough in Z now
-            // to pass clearly IN FRONT of and BEHIND the letters each lap.
-            0.95 * Math.sin(th + 1.1) + 0.20 * Math.sin(3*th)
+            0.95 * Math.sin(th) + 0.12 * Math.sin(2*th)            // depth locked to X
           );
           const SHN = 260;
           // measure base length
@@ -1822,6 +1894,19 @@
           for (let i = 0; i < SHN; i++) {
             flightPts.push(baseShape((i / SHN) * Math.PI * 2).multiplyScalar(scaleS));
           }
+          // ── guarantee the path clears the solid letter slab ──────────
+          // Half-extents of the "pk" block (TextGeometry size 8, depth 2.2
+          // + bevel) plus the serpent's body radius. If the scaled orbit
+          // isn't big enough on an axis, stretch that axis until it is —
+          // so no amount of retuning the shape can reintroduce clipping.
+          const LTR_HALF_X = 6.0, LTR_HALF_Z = 1.4, BODY_R = 1.9;
+          const NEED_X = LTR_HALF_X + BODY_R;      // clear past the ends
+          const NEED_Z = LTR_HALF_Z + BODY_R;      // clear in front / behind
+          let maxX = 0, maxZ = 0;
+          flightPts.forEach(p => { maxX = Math.max(maxX, Math.abs(p.x));
+                                   maxZ = Math.max(maxZ, Math.abs(p.z)); });
+          if (maxX < NEED_X) { const k = NEED_X / maxX; flightPts.forEach(p => p.x *= k); }
+          if (maxZ < NEED_Z) { const k = NEED_Z / maxZ; flightPts.forEach(p => p.z *= k); }
           const flightCurve = new THREE.CatmullRomCurve3(flightPts, true, 'catmullrom', 0.1);
           flightCurve.arcLengthDivisions = 1200;
           flightCurve.updateArcLengths();
@@ -1842,6 +1927,22 @@
             curve: flightCurve, curveLen: rqCurveLen,
             bodyChainSet: rqBodyChainSet,
           };
+          // clearance audit: sample the path and count points that fall
+          // inside the solid letter slab (should be exactly 0)
+          {
+            let viol = 0, minGap = 1e9;
+            for (let i = 0; i <= 600; i++) {
+              const p = flightCurve.getPointAt(i / 600);
+              const insideXY = Math.abs(p.x) < LTR_HALF_X && Math.abs(p.y) < 6.0;
+              if (insideXY) {
+                const gap = Math.abs(p.z) - LTR_HALF_Z;
+                minGap = Math.min(minGap, gap);
+                if (gap < BODY_R * 0.5) viol++;
+              }
+            }
+            window.__flightClearance = { violations: viol, minGap: +minGap.toFixed(2) };
+            log(`flight clearance · violations ${viol} · min gap ${minGap.toFixed(2)}`);
+          }
           log(`flight rig · driven ${driven.length} · bodyArc ${rqBodyArc.toFixed(1)} · curveLen ${rqCurveLen.toFixed(1)} (×${(rqCurveLen/rqBodyArc).toFixed(2)}) · junctionArc ${rqJunctionArc.toFixed(1)}`);
         } catch (e) {
           log('flight rig build failed: ' + e.message);
@@ -3028,7 +3129,13 @@
         const MODEL_X_OFFSET = -1;
         const idlePX = MODEL_X_OFFSET + Math.sin(t * 0.21 + 0.5) * 0.55;
         const idlePY =                  Math.sin(t * 0.32)        * 0.45;
-        const idlePZ =                  Math.sin(t * 0.18 + 1.2)  * 0.45;
+        // AT REST: always IN FRONT of the letters. The drift is offset by
+        // RQ_IDLE_Z rather than centred on zero, so the whole sine stays
+        // positive (nearer the camera than the glass) — it breathes in
+        // depth without ever sinking into or behind the solid letters.
+        // Passing behind is the FLIGHT path's job, not the idle's.
+        const RQ_IDLE_Z = 4.6;                       // > letter half-depth + body radius
+        const idlePZ = RQ_IDLE_Z + Math.sin(t * 0.18 + 1.2) * 0.6;
         const idleRX = Math.sin(t * 0.20 + 0.6) * 0.05;
         const idleRY = Math.sin(t * 0.17) * 0.07;
         const idleRZ = Math.sin(t * 0.24) * 0.10;
@@ -3354,7 +3461,7 @@
 
       // audio-reactive bloom — subtle pulse around base strength
       {
-        const target = 0.55 + amp * 0.45;
+        const target = 0.62 + amp * 0.45;   // base matches the new bloom strength
         bloomPass.strength += (target - bloomPass.strength) * 0.08;
       }
 
