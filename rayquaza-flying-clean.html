@@ -337,7 +337,7 @@
     // fetch, no CDN round-trips, huge win on mobile RTT.
     import {
       THREE, GLTFLoader, FontLoader, TextGeometry,
-      EffectComposer, RenderPass, UnrealBloomPass, OutputPass, ShaderPass,
+      EffectComposer, RenderPass, OutputPass, ShaderPass,
       toCreasedNormals
     } from './vendor/three.bundle.min.js?v=5';
 
@@ -760,7 +760,11 @@
     };
 
     /* (lightning system removed — the letters now carry a steady soft
-       glow instead; see the edge-glow block in installWetGlass.) */
+       glow instead; see the edge-glow block in installWetGlass. That glow
+       used to also pick up a soft bloom halo from UnrealBloomPass — now
+       removed, see the composer setup below. A baked halo sprite was
+       tried as a substitute and looked worse than nothing; the letters'
+       own per-pixel fresnel rim is the whole glow now, by choice.) */
 
     /* ══════════════════════════════════════════════════════════════════
        GRENINJA WORLD — water/ninja theme. Everything here is built once
@@ -829,7 +833,7 @@
              the up direction. This is the PROCEDURAL-SHAFT FALLBACK the
              spec allows (chosen over bolting the 3-pass GodRaysShader onto
              the shared EffectComposer, which would have risked rayquaza's
-             bloom/ACES chain — a contained dome layer is zero-risk and
+             post-process chain — a contained dome layer is zero-risk and
              gated greninja-only).
          (d) CAUSTICS        — underwater/caustics.png sampled as two
              scrolled layers, min()'d together to break tiling, with a
@@ -1083,7 +1087,7 @@
       // via the governor's shared QG_SNOW_THIN_FACTOR so the two sides
       // can't drift apart from a second hardcoded ratio. Keyed off the
       // qgSnowThinned FLAG rather than a tier number — the snow-thin step
-      // lands on a different tier per device class (desktop T2, touch T3;
+      // lands on a different tier per device class (desktop T1, touch T2;
       // see QG_LADDER_TOUCH/DESKTOP), so a tier-number check would silently
       // stop matching whichever ladder didn't put it there.
       const snowCount = qgSnowThinned
@@ -1198,7 +1202,7 @@
        travelling wave in tick() (built from userData.gyaChain in the
        loader) — the SAME technique rayquaza uses. Nothing to install here. */
 
-    /* ── post-processing: bloom + ACES tone mapping ───────────────── */
+    /* ── post-processing: ACES tone mapping (bloom REMOVED) ────────── */
     // Use the default composer targets and bump samples on them — this
     // is more reliable across pixel-ratio combinations than supplying
     // a custom render target. The defaults are HDR-friendly and resize
@@ -1222,34 +1226,36 @@
     composer.renderTarget1.texture.type = THREE.HalfFloatType;
     composer.renderTarget2.texture.type = THREE.HalfFloatType;
     composer.addPass(new RenderPass(scene, camera));
-    // (resolution, strength, radius, threshold) — high threshold so
-    // only the bright env-driven highlights bloom; starfield + glass
-    // stay clean.
-    // FULL-res bloom on every device. Half-res turns the model's tight neon
-    // rims and the letters' edge glow into blocky stair-stepped halos — it
-    // was tried on touch as a perf save and read as "boxy pixely glow".
-    // The budget comes from the removed touch terminal effect + cheaper
-    // nebula; the relief valve (transmission) covers weak GPUs.
-    const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth, window.innerHeight),
-      0.62,   // strength — a touch richer
-      0.58,   // radius — wider, softer falloff (glow breathes instead of ringing)
-      0.98    // threshold — slightly lower so the neon rims + glints bloom gently
-    );
-    composer.addPass(bloomPass);
+
+    /* (UnrealBloomPass REMOVED — it was a full-res mip-chain blur that ran
+       every single frame (downsample → blur → upsample across several
+       mips) just to put a soft halo around the model's specular hotspots
+       and the glass letters' fresnel edges. That per-frame cost bought a
+       largely STATIC effect — the letters don't move, and the model's
+       highlights track the fixed sun/moon direction, not fast motion — so
+       it was paying full-frame-blur money for a largely static look.
+       Neither has a replacement: a baked halo sprite for the letters was
+       tried and rejected on sight, and the model's bloom-driven specular
+       flare goes back to crisp unblurred highlights — both deliberate,
+       user-approved trades for killing the per-frame chain. )
+       The per-pixel fresnel/moonlit rim light injected directly into the
+       glass shader (see installWetGlass's edge-glow block, further below)
+       is untouched by this — it was never bloom, just ordinary forward
+       shading, so it costs the same as before. */
 
     /* (rain-on-glass fullscreen post-process REMOVED — it was permanently
        disabled; per-letter droplets from installWetGlass are the wet effect.) */
 
-    // OutputPass applies ACES Filmic at the END so bloom is computed in
-    // linear and only tone-mapped once.
+    // OutputPass applies ACES Filmic tone mapping at the END — the only
+    // pass ahead of it now is the plain RenderPass, so this is just the
+    // linear → display conversion, nothing upstream to sequence around.
     composer.addPass(new OutputPass());
 
-    // ── final dither ── the bloom's big soft gradients quantize to visible
-    // stepped rings ("banding") on 8-bit screens — the boxy contours around
-    // the glow. ±0.6 LSB of per-pixel noise is itself invisible but breaks
-    // the rings into smooth-looking gradients. Runs after tone mapping so
-    // it dithers the actual output levels.
+    // ── final dither ── the scene's big soft HDR gradients (moonlit
+    // specular falloff, sky/env highlights) quantize to visible stepped
+    // rings ("banding") on 8-bit screens. ±0.6 LSB of per-pixel noise is
+    // itself invisible but breaks the rings into smooth-looking gradients.
+    // Runs after tone mapping so it dithers the actual output levels.
     composer.addPass(new ShaderPass({
       uniforms: { tDiffuse: { value: null } },
       vertexShader: `varying vec2 vUv;
@@ -1987,9 +1993,8 @@
         }
 
         // warm up: compile all materials + run one full composer pass so
-        // every shader (incl. bloom's render-target programs) is linked
-        // up front. Without this the FIRST visible frame stalls on
-        // shader-link — the main cause of the resume hitch.
+        // every shader is linked up front. Without this the FIRST visible
+        // frame stalls on shader-link — the main cause of the resume hitch.
         try {
           renderer.compile(scene, camera);
           composer.render();
@@ -2456,8 +2461,10 @@
        ADAPTIVE QUALITY GOVERNOR
 
        This scene is built for a decent desktop GPU and ships that way to
-       everyone — full-res bloom, full transmission buffer, 4x MSAA, DPR
-       supersampling (see the renderer + composer comments above). That's
+       everyone — full transmission buffer, 4x MSAA, DPR supersampling
+       (see the renderer + composer comments above; bloom is gone
+       entirely now — see the composer setup — so it's no longer part of
+       what "full quality" even means here). That's
        deliberate: most visitors have the headroom, and forking the whole
        render path by device class ahead of time both under-serves strong
        devices and can't actually predict which weak ones will struggle,
@@ -2471,7 +2478,7 @@
        visibly un-stepping mid-visit.
 
        FREEZE-FRAME FLOOR: the ladder doesn't degrade forever. Its LAST
-       rung on both device classes (touch T6, desktop T5 — see
+       rung on both device classes (touch T5, desktop T4 — see
        applyFreezeFrame below) is different in kind from every rung above
        it: instead of shaving more cost off a scene that's still live and
        moving, it accepts that a live scene isn't affordable on this
@@ -2497,15 +2504,12 @@
        exhausted" means a different tier count per device class.
 
          TOUCH  (QG_LADDER_TOUCH — fps before resolution):
-           T1  bloom render targets → half res (on top of UnrealBloomPass's
-               own internal halving — see applyBloomHalfRes below). Blocky
-               glow edges up close, invisible from normal viewing distance.
-           T2  render-rate cap → 45fps (see the tick() frame cap and
+           T1  render-rate cap → 45fps (see the tick() frame cap and
                _qgFrameMin, below). Halves GPU submit rate with zero
                visible change on this slow ambient scene — the same
                "spend budget where it's actually seen" logic that
                justified restoring native DPR above.
-           T3  render-rate cap → 30fps, AND marine snow draw range → 40%
+           T2  render-rate cap → 30fps, AND marine snow draw range → 40%
                of its particle count (GPU side, via setDrawRange) AND the
                same 40% bound on updateSnow's per-frame CPU loop (see
                QG_SNOW_THIN_FACTOR / the qgSnowThinned flag) — the draw
@@ -2513,36 +2517,35 @@
                the GPU was told to skip. Snow is ambient background
                dressing, greninja-mode only — most visitors on the
                default rayquaza scene never see this tier fire at all.
-           T4  transmission (glass-refraction) buffer scale → 0.6. This
+           T3  transmission (glass-refraction) buffer scale → 0.6. This
                DELIBERATELY breaks the "effective res (scale × DPR) ≥ 2.0"
                sharpness rule documented on transmissionResolutionScale
                above — a struggling device would rather show soft "pk"
                letters than keep dropping frames. Softness beats stutter.
-           T5  device pixel ratio → max(1.0, current × 0.72) (mechanics
-               below, desktop T4 entry) — fps and two other buffers get
+           T4  device pixel ratio → max(1.0, current × 0.72) (mechanics
+               below, desktop T3 entry) — fps and the other buffer get
                tried before a phone ever gives up the sharpness the whole
                point of this rework was to keep.
-           T6  freeze-frame — the actual last resort. See the
+           T5  freeze-frame — the actual last resort. See the
                FREEZE-FRAME FLOOR note above and applyFreezeFrame below;
                hides model + snow, restores ship quality, renders one
                frame, stops the RAF loop for the rest of the visit.
 
          DESKTOP  (QG_LADDER_DESKTOP — unchanged behavior from before this
          pass, just re-expressed as a ladder array):
-           T1  bloom render targets → half res, same as touch T1.
-           T2  marine snow → 40%, same mechanism as touch T3 — reached one
+           T1  marine snow → 40%, same mechanism as touch T2 — reached one
                tier earlier since desktop has no fps-cap tiers ahead of it.
-           T3  transmission buffer → 0.6, same as touch T4.
-           T4  device pixel ratio → max(1.0, current × 0.72), applied to
+           T2  transmission buffer → 0.6, same as touch T3.
+           T3  device pixel ratio → max(1.0, current × 0.72), applied to
                both the renderer and the composer, then a full resize so
                every buffer in the pipeline actually shrinks. Scaled off
                the CURRENT dpr (not clamped to a fixed cap) so it's a real
                cut at every starting point — a fixed 1.5 cap was a no-op on
                most desktops, which already ship at DPR_CAP 1.4. The
                biggest single win and the most visible change (softens the
-               whole frame, not just one buffer) — same as touch T5.
-           T5  freeze-frame — the actual last resort, same rung and same
-               mechanics as touch T6 above (see the FREEZE-FRAME FLOOR
+               whole frame, not just one buffer) — same as touch T4.
+           T4  freeze-frame — the actual last resort, same rung and same
+               mechanics as touch T5 above (see the FREEZE-FRAME FLOOR
                note above and applyFreezeFrame below).
 
        MEASUREMENT: the RAF delta is ground truth for "can this device
@@ -2595,13 +2598,20 @@
        a device that already told us its ceiling — it lands directly on
        the known-good tier instead, then resumes the watchdog from there.
        ══════════════════════════════════════════════════════════════════ */
-    const QG_STORAGE_KEY     = 'heroQualityTier2';  // bumped from 'heroQualityTier':
-                                      // tier NUMBERS now mean different things
-                                      // per device class (see the ladder
-                                      // tables above) — a stale tier read back
-                                      // from the old single-scheme key could
-                                      // misapply a step that means something
-                                      // else on this ladder.
+    const QG_STORAGE_KEY     = 'heroQualityTier3';  // bumped from 'heroQualityTier2':
+                                      // the bloom rung was removed from both
+                                      // ladders (UnrealBloomPass is gone —
+                                      // see the composer setup above), so
+                                      // every tier NUMBER above it shifted
+                                      // down by one on both device classes.
+                                      // A stale tier read back under the old
+                                      // key would misapply a step that now
+                                      // means something else entirely (e.g.
+                                      // old touch T2's 45fps cap is new
+                                      // touch T1) — bumping the key forces a
+                                      // fresh calibration instead of
+                                      // trusting a number that changed
+                                      // meaning out from under it.
     const QG_WARMUP_FRAMES   = 30;   // shader-compile jank — not signal
     const QG_REWARMUP_FRAMES = 15;   // shorter re-settle after a LIVE tier
                                       // step (resize-realloc jank, not a
@@ -2616,7 +2626,7 @@
     const QG_OUTLIER_MS      = 250;  // tab-switch / devtools gap, discard
     const QG_SNOW_THIN_FACTOR = 0.4; // shared with updateSnow's CPU-side thin
     // QG_MAX_TIER is derived further below, once QG_LADDER is picked — its
-    // value now depends on device class (6 touch tiers, 5 desktop,
+    // value now depends on device class (5 touch tiers, 4 desktop,
     // including the freeze-frame floor on each — see applyFreezeFrame).
 
     let qgTier           = 0;            // current/settled tier (0 = full quality)
@@ -2667,31 +2677,21 @@
                                           // FLAG instead of a tier number,
                                           // since the snow-thin step lands on
                                           // a different tier per device class
-                                          // (desktop T2, touch T3).
+                                          // (desktop T1, touch T2).
     let _qgFrameMin      = TOUCH_DEVICE ? (1000 / 60) : 0;
                                           // touch: render-rate cap read by
                                           // tick()'s frame gate (below).
                                           // Starts at 60fps and is only ever
                                           // LOWERED, by the touch ladder's
-                                          // T2/T3 fps-cap steps. Desktop: 0,
+                                          // T1/T2 fps-cap steps. Desktop: 0,
                                           // unused — the tick() cap check
                                           // itself is TOUCH_DEVICE-gated so
                                           // this value never gets read there.
 
-    // T1 on both ladders — halve the bloom pass's internal render targets.
-    // UnrealBloomPass already halves whatever size you hand its setSize
-    // (its mip0 targets are w/2 × h/2 of the resolution passed in —
-    // confirmed in the bundled source); passing the window's HALF
-    // dimensions here halves it again, landing the actual bloom buffers
-    // at a quarter of the window's linear resolution.
-    function applyBloomHalfRes() {
-      bloomPass.setSize(Math.floor(window.innerWidth / 2), Math.floor(window.innerHeight / 2));
-    }
-
     // marine snow → 40% of its particle count via setDrawRange (cheap: no
     // reallocation, no re-upload, just fewer vertices submitted per
     // frame) + flip the qgSnowThinned flag that updateSnow's CPU loop
-    // reads (see updateSnow above) — desktop T2, touch T3 (ladder tables
+    // reads (see updateSnow above) — desktop T1, touch T2 (ladder tables
     // above). Guarded because snow is a greninja-only decoration — it's
     // currently always created eagerly at module init (see the
     // marine-snow block above) so this should never actually be null,
@@ -2783,12 +2783,12 @@
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
       composer.setSize(window.innerWidth, window.innerHeight);
-      bloomPass.setSize(window.innerWidth, window.innerHeight);
       // NOTE: deliberately NOT routed through applyResize() below — that
-      // helper re-applies half-res bloom whenever qgTier >= 1, and
-      // qgTier IS >= 1 here (freeze is a tier too), so calling it would
-      // silently undo the bloom restore on the very next line. applyResize
-      // itself special-cases qgFrozen for the same reason — see below.
+      // helper's qgFrozen branch already covers a resize while frozen, but
+      // duplicating the sizing calls here keeps this function's "undo
+      // every earlier rung, render the one frame, done" sequence self-
+      // contained rather than depending on qgFrozen being set before the
+      // call (it isn't, yet — see the next line).
 
       qgFrozen = true;   // terminal — see declaration above.
       composer.render();   // the one frame the still shows from here on.
@@ -2801,22 +2801,15 @@
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
       composer.setSize(window.innerWidth, window.innerHeight);
-      bloomPass.setSize(window.innerWidth, window.innerHeight);
       // frozen: there's no live tier to reapply — qgTier just holds the
       // persisted freeze-rung number, and the still is supposed to stay
-      // at full ship quality (see applyFreezeFrame), not step back down
-      // to half-res bloom. Resize the still and repaint the one frame at
-      // its new size instead, and don't touch the RAF loop that
-      // applyFreezeFrame already stopped.
+      // at full ship quality (see applyFreezeFrame). Resize the still and
+      // repaint the one frame at its new size instead, and don't touch
+      // the RAF loop that applyFreezeFrame already stopped.
       if (qgFrozen) {
         composer.render();
         return;
       }
-      // bloomPass.setSize() above always resets it to full res; if the
-      // governor already stepped down to half-res bloom (T1+ on either
-      // ladder — both put it at T1), a resize would otherwise silently
-      // hand the cost back.
-      if (qgTier >= 1) applyBloomHalfRes();
     }
     // coalesce resize events through a single rAF: a window drag fires
     // dozens of 'resize' events per second, and applyResize's qgFrozen
@@ -2839,22 +2832,20 @@
     // already sitting on the renderer / composer / meshes and don't need
     // re-doing.
     const QG_LADDER_TOUCH = [
-      applyBloomHalfRes,                              // T1 — bloom half-res
-      () => applyFpsCap(45),                          // T2 — 45fps cap
-      () => { applyFpsCap(30); applySnowThinned(); }, // T3 — 30fps cap + snow thin
-      applyTransmissionReduced,                       // T4 — transmission 0.6
-      applyDprStep,                                   // T5 — DPR ×0.72
-      applyFreezeFrame,                                // T6 — freeze-frame, last resort
+      () => applyFpsCap(45),                          // T1 — 45fps cap
+      () => { applyFpsCap(30); applySnowThinned(); }, // T2 — 30fps cap + snow thin
+      applyTransmissionReduced,                       // T3 — transmission 0.6
+      applyDprStep,                                   // T4 — DPR ×0.72
+      applyFreezeFrame,                                // T5 — freeze-frame, last resort
     ];
     const QG_LADDER_DESKTOP = [
-      applyBloomHalfRes,        // T1 — bloom half-res
-      applySnowThinned,         // T2 — snow thin
-      applyTransmissionReduced, // T3 — transmission 0.6
-      applyDprStep,              // T4 — DPR ×0.72
-      applyFreezeFrame,          // T5 — freeze-frame, last resort
+      applySnowThinned,         // T1 — snow thin
+      applyTransmissionReduced, // T2 — transmission 0.6
+      applyDprStep,              // T3 — DPR ×0.72
+      applyFreezeFrame,          // T4 — freeze-frame, last resort
     ];
     const QG_LADDER   = TOUCH_DEVICE ? QG_LADDER_TOUCH : QG_LADDER_DESKTOP;
-    const QG_MAX_TIER = QG_LADDER.length;   // 6 on touch, 5 on desktop
+    const QG_MAX_TIER = QG_LADDER.length;   // 5 on touch, 4 on desktop
 
     function applyQualityTier(tier) {
       const step = QG_LADDER[tier - 1];
@@ -3036,18 +3027,18 @@
       // which is true this early (this IIFE runs at module init, well
       // before the GLTF load's onLoad/__heroReady fires). So: apply
       // every rung UP TO but NOT INCLUDING freeze immediately (cheap,
-      // scene-independent — bloom/snow/transmission/DPR all just mutate
+      // scene-independent — snow/transmission/DPR all just mutate
       // renderer/composer state), and queue the freeze rung itself for
       // the __heroReady handler (see the loader's onLoad above) to apply
       // once the scene is actually ready to be photographed.
       const isFreeze    = restored === QG_MAX_TIER;
       const liveCeiling = isFreeze ? restored - 1 : restored;
-      // qgTier must be set BEFORE each apply, not after the loop — the
-      // DPR tier's applyDprStep()→applyResize() reads `qgTier >= 1` to
-      // decide whether to re-apply half-res bloom (see applyResize
-      // above), so restoring straight to the max tier with qgTier still
-      // sitting at its default 0 was reading the bloom buffer back up to
-      // full res on every resize.
+      // qgTier is tracked through the loop (set BEFORE each apply, not
+      // after) so any code that reads it mid-restore sees the rung
+      // actually being applied, not a stale default — nothing currently
+      // depends on this ordering as tightly as the old bloom-reapply-on-
+      // resize path once did (see applyResize's history), but there's no
+      // reason to regress it.
       for (let t = 1; t <= liveCeiling; t++) {
         qgTier = t;
         applyQualityTier(t);
@@ -4249,11 +4240,12 @@
       _camTarget.set(modelCenter.x + CAM_X_SHIFT, modelCenter.y, modelCenter.z);
       camera.lookAt(_camTarget);
 
-      // audio-reactive bloom — subtle pulse around base strength
-      {
-        const target = 0.62 + amp * 0.45;   // base matches the new bloom strength
-        bloomPass.strength += (target - bloomPass.strength) * 0.08;
-      }
+      // (audio-reactive bloom pulse REMOVED along with UnrealBloomPass —
+      // see the composer setup above. The glass shader's own uPulse-driven
+      // rim brightness (see installWetGlass) still reacts to the beat; the
+      // letters' new baked glow quad, by contrast, is static — it was the
+      // per-frame bloom pulse specifically, not audio-reactivity in
+      // general, that needed the now-gone pass to do anything.)
 
       // audio-reactive camera FOV breath — tiny zoom-in on bass hits
       {
