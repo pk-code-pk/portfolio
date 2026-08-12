@@ -353,29 +353,38 @@
       '<span class="st-sub">class of 2028</span></span>';
 
     /* ── renderer ─────────────────────────────────────────────────── */
-    // touch devices: cap DPR at 1 (vs 2) — halves the fragment-shader
-    // load (bloom + nebula + transmission are all per-pixel heavy), the
-    // single biggest win against mobile scroll jank.
     const TOUCH_DEVICE = window.matchMedia('(hover: none), (pointer: coarse)').matches;
-    // touch: capped at 2 — native (DPR 3 phones) was tried and cooked the
-    // phone: 9x the fragment work of DPR 1, at 120Hz on ProMotion. DPR 2
-    // keeps edges sharp on a ~390pt viewport at 4/9 the pixel cost.
+    // touch: NATIVE devicePixelRatio, uncapped — crispness is visible on
+    // EVERY frame (a soft edge reads as soft the whole time you look at
+    // it), while this scene's frame RATE is not (nothing moves fast
+    // enough for 90fps vs 60fps to read as different). Capping DPR to 2
+    // was previously how heat got controlled on ProMotion phones, but
+    // that traded away the thing visitors actually perceive to protect
+    // against a thing they don't. Heat is now controlled by the 60fps
+    // render cap in tick() (below) + the adaptive quality governor's
+    // ladder — resolution is the LAST tier either one touches, not the
+    // first.
     // Desktop: native × 1.4 SUPERSAMPLE (capped 2.8) — renders above
     // the physical grid and downscales, which is what makes the glass
     // letters read "crispy" rather than merely correct; desktop GPUs have
-    // the headroom. Resolution is constant for the whole visit — the
-    // relief valve only ever touches the transmission buffer.
+    // the headroom. Resolution here is the SHIP value, not a permanent
+    // constant — the adaptive quality governor's last live rung (desktop
+    // T4 / touch T5, see applyDprStep near the resize handler below) can
+    // still shrink it on a device that can't hold budget everywhere else
+    // on the ladder first, and the freeze-frame floor (desktop T5 / touch
+    // T6) restores it back to this ship value for the still it leaves
+    // behind. Neither is the common case — most visits never touch either.
     const DPR_CAP = TOUCH_DEVICE
-      ? Math.min(window.devicePixelRatio || 2, 2)
+      ? (window.devicePixelRatio || 2)
       : Math.min((window.devicePixelRatio || 1) * 1.4, 2.8);
     // antialias:false — EffectComposer renders to its own MSAA render targets;
     // the renderer's native AA applies only to the default framebuffer which
     // the composer never uses. MSAA on composer.renderTarget1/2 handles AA.
     // powerPreference hints OS to use discrete GPU on dual-GPU machines.
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
-    // DPR_CAP is the FULL target (touch: min(native,2); desktop: 1.4× native
-    // supersample) — no min() against native or the supersample would be
-    // clamped away.
+    // DPR_CAP is the FULL target (touch: native, uncapped; desktop: 1.4×
+    // native supersample, capped 2.8) — no min() against native or the
+    // supersample would be clamped away.
     renderer.setPixelRatio(DPR_CAP);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -383,22 +392,22 @@
     renderer.toneMappingExposure = 1.0;
     // the pk glass uses transmission:1.0, which makes three.js render the
     // WHOLE scene into an offscreen buffer every frame just to sample
-    // refraction through it. It was scaled to 0.25 for GPU savings, but that
-    // quarter-res buffer is exactly what the "pk" letters refract — they
-    // looked soft/low-res. Full res on desktop restores crisp refraction;
-    // 0.5 on touch is DPR1-equivalent (sharp) at a quarter of the cost.
-    // This buffer IS the visible body of the pk letters (transmission =
-    // the letters show the scene refracted through them). It also costs a
-    // full second scene render per frame. Rule: its EFFECTIVE resolution
-    // (scale × DPR) must stay ≥ 2.0 — the sharpness bar the letters need.
-    //   desktop: 1.0 × DPR2   = 2.0
-    //   touch:   1.0 × DPR2   = 2.0  (DPR now capped at 2 on touch)
-    renderer.transmissionResolutionScale = 1.0;
+    // refraction through it. This buffer IS the visible body of the pk
+    // letters (transmission = the letters show the scene refracted through
+    // them), and it costs a full second scene render per frame — so it's
+    // the one place touch still trims scale rather than paying full res,
+    // even with DPR restored to native above. Rule: its EFFECTIVE
+    // resolution (scale × DPR) must stay ≥ 2.0 — the sharpness bar the
+    // letters need.
+    //   desktop: 1.0 × DPR(~1.4-2.8 supersampled) = well above 2.0
+    //   touch:   0.7 × DPR3 (native, the common phone case) = 2.1
+    renderer.transmissionResolutionScale = TOUCH_DEVICE ? 0.7 : 1.0;
     // NOTE: the adaptive quality governor (see the big comment block near
-    // the resize handler, below) is allowed to lower this at its T3 tier
-    // on a device that can't hold frame budget — that deliberately
-    // breaks the ≥2.0 rule above. A struggling device prefers soft
-    // letters over dropped frames.
+    // the resize handler, below) is allowed to lower this further on a
+    // device that can't hold frame budget (desktop T3, touch T4 — the
+    // ladder differs by device class, see QG_LADDER_TOUCH/DESKTOP) —
+    // that deliberately breaks the ≥2.0 rule above. A struggling device
+    // prefers soft letters over dropped frames.
 
     /* ── scene ─────────────────────────────────────────────────────── */
     const scene  = new THREE.Scene();
@@ -1066,14 +1075,18 @@
     function updateSnow(t) {
       const cx = modelCenter.x, cy = modelCenter.y, cz = modelCenter.z - SNOW_Z_BACK;
       const span = SNOW_H, pos = snowPos;
-      // adaptive quality governor T2 (see the governor section below):
+      // adaptive quality governor (see the governor section below):
       // applySnowThinned()'s setDrawRange only cuts what the GPU draws —
       // this loop still walked and rewrote every one of UW_MARINE_COUNT
-      // particles' positions each frame regardless, so tier 2 saved
-      // nothing on the CPU side. Mirror the same thinned count here via
-      // the governor's shared QG_SNOW_THIN_FACTOR so the two sides can't
-      // drift apart from a second hardcoded ratio.
-      const snowCount = (qgTier >= 2)
+      // particles' positions each frame regardless, so that tier alone
+      // saved nothing on the CPU side. Mirror the same thinned count here
+      // via the governor's shared QG_SNOW_THIN_FACTOR so the two sides
+      // can't drift apart from a second hardcoded ratio. Keyed off the
+      // qgSnowThinned FLAG rather than a tier number — the snow-thin step
+      // lands on a different tier per device class (desktop T2, touch T3;
+      // see QG_LADDER_TOUCH/DESKTOP), so a tier-number check would silently
+      // stop matching whichever ladder didn't put it there.
+      const snowCount = qgSnowThinned
         ? Math.floor(UW_MARINE_COUNT * QG_SNOW_THIN_FACTOR)
         : UW_MARINE_COUNT;
       for (let i = 0; i < snowCount; i++) {
@@ -1985,11 +1998,26 @@
         // HERO READY: model loaded + shaders compiled + first frame rendered.
         // Tell the parent so its preloader can dismiss only once the hero is
         // actually on screen (was dismissing on a fixed timer, leaving a blank
-        // hero loading on slow phones).
+        // hero loading on slow phones). This postMessage is the FIRST thing
+        // that happens here, in its own try/catch — it must reach the parent
+        // even if the queued-freeze block below throws, or the preloader is
+        // stuck forever with no way out.
         try {
           window.__heroReady = true;
           if (window.parent && window.parent !== window) {
             window.parent.postMessage({ __heroReady: true }, '*');
+          }
+        } catch (e) {}
+        // a restored freeze-frame tier (see qgRestore above) couldn't be
+        // applied at module init — the model wasn't in the scene yet. The
+        // scene is photographable now: apply it for real. Own try/catch,
+        // AFTER the ready postMessage above, so a throw here can't swallow
+        // the signal the parent is waiting on.
+        try {
+          if (qgFreezeQueued) {
+            qgFreezeQueued = false;
+            qgTier = QG_MAX_TIER;
+            applyQualityTier(QG_MAX_TIER);
           }
         } catch (e) {}
       },
@@ -2362,6 +2390,15 @@
 
     async function switchPokemon() {
       if (switching) return;
+      // frozen: the RAF loop is permanently stopped and the still is the
+      // ENTIRE scene from here on (see qgFrozen / applyFreezeFrame above).
+      // A switch here would mutate scene state — model visibility, world
+      // meshes, fog — with no live loop left to render any of it; that
+      // half-mutated state would just sit there until the next frozen
+      // resize/resume repaint painted it as if it were real. No-op instead.
+      // Covers both callers: the button click below and the parent's
+      // postMessage 'switchPokemon' action (see the message listener below).
+      if (qgFrozen) return;
       const next = currentPokemon === 'rayquaza' ? 'greninja' : 'rayquaza';
       switching = true;
       if (pokeBtn) pokeBtn.disabled = true;
@@ -2433,31 +2470,80 @@
        background tab finished loading) isn't worth the flicker risk of
        visibly un-stepping mid-visit.
 
-       LADDER (cheapest-to-notice → most-noticeable; cumulative — each
-       step leaves the previous tiers' changes in place and adds one more):
-         T1  bloom render targets → half res (on top of UnrealBloomPass's
-             own internal halving — see applyBloomHalfRes below). Blocky
-             glow edges up close, invisible from normal viewing distance.
-         T2  marine snow draw range → 40% of its particle count (GPU side,
-             via setDrawRange) AND the same 40% bound on updateSnow's
-             per-frame CPU loop (see QG_SNOW_THIN_FACTOR) — the draw
-             range alone doesn't stop the CPU from updating particles
-             the GPU was told to skip. Ambient background dressing,
-             greninja-mode only — most visitors on the default rayquaza
-             scene never see this tier fire at all.
-         T3  transmission (glass-refraction) buffer scale → 0.6. This
-             DELIBERATELY breaks the "effective res (scale × DPR) ≥ 2.0"
-             sharpness rule documented on transmissionResolutionScale
-             above — a struggling device would rather show soft "pk"
-             letters than keep dropping frames. Softness beats stutter.
-         T4  device pixel ratio → max(1.0, current × 0.72), applied to
-             both the renderer and the composer, then a full resize so
-             every buffer in the pipeline actually shrinks. Scaled off
-             the CURRENT dpr (not clamped to a fixed cap) so it's a real
-             cut at every starting point — a fixed 1.5 cap was a no-op on
-             most desktops, which already ship at DPR_CAP 1.4. The
-             biggest single win and the most visible change (softens the
-             whole frame, not just one buffer) — last resort.
+       FREEZE-FRAME FLOOR: the ladder doesn't degrade forever. Its LAST
+       rung on both device classes (touch T6, desktop T5 — see
+       applyFreezeFrame below) is different in kind from every rung above
+       it: instead of shaving more cost off a scene that's still live and
+       moving, it accepts that a live scene isn't affordable on this
+       device at all, hides the moving parts, undoes every earlier rung's
+       visual compromise (free to, since nothing renders every frame
+       anymore), paints exactly one frame at full ship quality, and stops
+       the render loop for good. A frozen hero at full fidelity beats a
+       live one that's been degraded five times over — and a single
+       frame costs nothing sustained, so there's no reason to hold back
+       quality on it the way every earlier rung had to.
+
+       DEVICE-AWARE LADDER: touch and desktop order their tiers
+       differently, because the two device classes hide cost in different
+       places. Touch ships at NATIVE DPR (see DPR_CAP above) — resolution
+       is the thing a phone visitor actually perceives every frame, so on
+       touch the ladder spends fps and secondary buffers FIRST and only
+       cuts resolution as an absolute last resort. Desktop has DPR
+       headroom to spare (it's already supersampling), so its ladder
+       leaves fps alone entirely and keeps the order it always had. Both
+       ladders are cumulative — each step leaves the previous tiers'
+       changes in place and adds one more — and QG_MAX_TIER is just the
+       chosen ladder's length (see QG_LADDER below), so "ladder
+       exhausted" means a different tier count per device class.
+
+         TOUCH  (QG_LADDER_TOUCH — fps before resolution):
+           T1  bloom render targets → half res (on top of UnrealBloomPass's
+               own internal halving — see applyBloomHalfRes below). Blocky
+               glow edges up close, invisible from normal viewing distance.
+           T2  render-rate cap → 45fps (see the tick() frame cap and
+               _qgFrameMin, below). Halves GPU submit rate with zero
+               visible change on this slow ambient scene — the same
+               "spend budget where it's actually seen" logic that
+               justified restoring native DPR above.
+           T3  render-rate cap → 30fps, AND marine snow draw range → 40%
+               of its particle count (GPU side, via setDrawRange) AND the
+               same 40% bound on updateSnow's per-frame CPU loop (see
+               QG_SNOW_THIN_FACTOR / the qgSnowThinned flag) — the draw
+               range alone doesn't stop the CPU from updating particles
+               the GPU was told to skip. Snow is ambient background
+               dressing, greninja-mode only — most visitors on the
+               default rayquaza scene never see this tier fire at all.
+           T4  transmission (glass-refraction) buffer scale → 0.6. This
+               DELIBERATELY breaks the "effective res (scale × DPR) ≥ 2.0"
+               sharpness rule documented on transmissionResolutionScale
+               above — a struggling device would rather show soft "pk"
+               letters than keep dropping frames. Softness beats stutter.
+           T5  device pixel ratio → max(1.0, current × 0.72) (mechanics
+               below, desktop T4 entry) — fps and two other buffers get
+               tried before a phone ever gives up the sharpness the whole
+               point of this rework was to keep.
+           T6  freeze-frame — the actual last resort. See the
+               FREEZE-FRAME FLOOR note above and applyFreezeFrame below;
+               hides model + snow, restores ship quality, renders one
+               frame, stops the RAF loop for the rest of the visit.
+
+         DESKTOP  (QG_LADDER_DESKTOP — unchanged behavior from before this
+         pass, just re-expressed as a ladder array):
+           T1  bloom render targets → half res, same as touch T1.
+           T2  marine snow → 40%, same mechanism as touch T3 — reached one
+               tier earlier since desktop has no fps-cap tiers ahead of it.
+           T3  transmission buffer → 0.6, same as touch T4.
+           T4  device pixel ratio → max(1.0, current × 0.72), applied to
+               both the renderer and the composer, then a full resize so
+               every buffer in the pipeline actually shrinks. Scaled off
+               the CURRENT dpr (not clamped to a fixed cap) so it's a real
+               cut at every starting point — a fixed 1.5 cap was a no-op on
+               most desktops, which already ship at DPR_CAP 1.4. The
+               biggest single win and the most visible change (softens the
+               whole frame, not just one buffer) — same as touch T5.
+           T5  freeze-frame — the actual last resort, same rung and same
+               mechanics as touch T6 above (see the FREEZE-FRAME FLOOR
+               note above and applyFreezeFrame below).
 
        MEASUREMENT: the RAF delta is ground truth for "can this device
        afford this frame" — it already bakes in JS cost, GPU submit, and
@@ -2475,12 +2561,23 @@
        time. Budget is normally median > 18ms (~55fps — a comfortable
        floor under normal 60Hz jitter, and still comfortably UNDER budget
        on a 120Hz panel's healthy ~8.3ms, so ProMotion displays never
-       false-trigger this) — but on a display that simply refreshes
-       slower than 60Hz (30fps Low Power Mode, a 50Hz external panel),
-       18ms would walk the whole ladder on a device with zero real jank,
-       so the budget is widened to the window's own smallest delta + 4ms
-       when that's looser. Deltas over 250ms (tab switches, devtools
-       pauses) are discarded as noise, and nothing is measured while
+       false-trigger this) — but that floor also widens to the window's
+       own smallest delta + 4ms when that's looser: a display that simply
+       refreshes slower than 60Hz (30fps Low Power Mode, a 50Hz external
+       panel) would otherwise see 18ms walk the whole ladder with zero
+       real jank, and on touch, once an fps-cap tier (T2/T3) has fired,
+       the OBSERVED minDelta already reflects the cap doing its job — a
+       45fps cap means every well-behaved frame is ~22ms apart BY DESIGN.
+       (An earlier version of this also widened the floor against the
+       DECLARED cap, _qgFrameMin + 4 — dropped: the declared cap can be
+       unreachable on a mismatched refresh rate, e.g. 45fps requested on a
+       60Hz panel actually achieves 30fps/33ms, and budgeting against the
+       unreachable 26ms declared floor was a guaranteed phantom step.
+       minDelta alone already captures the real achieved interval.) So the
+       effective budget is max(QG_BUDGET_MS, minDelta + 4) — whichever
+       floor is loosest wins (see the budget line in qgTick below).
+       Deltas over 250ms (tab switches, devtools pauses)
+       are discarded as noise, and nothing is measured while
        paused/throttled or the tab is hidden, or on the single frame
        right after a pause/throttle/resume transition (a catch-up delta,
        not real render cost) — none of those reflect steady-state render
@@ -2498,7 +2595,13 @@
        a device that already told us its ceiling — it lands directly on
        the known-good tier instead, then resumes the watchdog from there.
        ══════════════════════════════════════════════════════════════════ */
-    const QG_STORAGE_KEY     = 'heroQualityTier';
+    const QG_STORAGE_KEY     = 'heroQualityTier2';  // bumped from 'heroQualityTier':
+                                      // tier NUMBERS now mean different things
+                                      // per device class (see the ladder
+                                      // tables above) — a stale tier read back
+                                      // from the old single-scheme key could
+                                      // misapply a step that means something
+                                      // else on this ladder.
     const QG_WARMUP_FRAMES   = 30;   // shader-compile jank — not signal
     const QG_REWARMUP_FRAMES = 15;   // shorter re-settle after a LIVE tier
                                       // step (resize-realloc jank, not a
@@ -2508,10 +2611,13 @@
     const QG_SAMPLE_WATCH    = 240;  // slow post-settle watchdog window
     const QG_BUDGET_MS       = 18;   // ~55fps floor
     const QG_BUDGET_MARGIN   = 4;    // headroom over a window's own min delta
-                                      // when deriving the effective budget
+                                      // (or the current fps cap) when deriving
+                                      // the effective budget
     const QG_OUTLIER_MS      = 250;  // tab-switch / devtools gap, discard
-    const QG_MAX_TIER        = 4;
     const QG_SNOW_THIN_FACTOR = 0.4; // shared with updateSnow's CPU-side thin
+    // QG_MAX_TIER is derived further below, once QG_LADDER is picked — its
+    // value now depends on device class (6 touch tiers, 5 desktop,
+    // including the freeze-frame floor on each — see applyFreezeFrame).
 
     let qgTier           = 0;            // current/settled tier (0 = full quality)
     let qgWatchdog        = false;       // true once the fast ladder has
@@ -2523,33 +2629,170 @@
                                           // waits out before collecting
     let qgSamples        = [];           // frame-delta samples for the live window
     let qgSampleTarget   = QG_SAMPLE_FIRST;
-    let qgDPR            = DPR_CAP;      // only shrinks, at T4
+    let qgDPR            = DPR_CAP;      // only shrinks, at the DPR tier
+                                          // (desktop T4 / touch T5)
     let qgSkipNext       = false;        // drop one sample after a
                                           // pause/throttle/resume transition
     let qgPrevRenderMode = 'resume';     // transition detector for qgSkipNext
+    let qgFreezeStrikes  = 0;            // consecutive over-budget windows
+                                          // measured AT the freeze threshold
+                                          // (one step below QG_MAX_TIER).
+                                          // Freeze is irreversible for the
+                                          // rest of the session (see qgFrozen
+                                          // below), so committing to it needs
+                                          // TWO consecutive bad windows, not
+                                          // one — a single window can be a
+                                          // background-tab compositor hiccup
+                                          // or a momentary thermal spike, not
+                                          // a real steady-state ceiling. Reset
+                                          // to 0 by any under-budget window
+                                          // (see qgTick) — a blip in between
+                                          // doesn't count toward the streak.
+    let qgFrozen         = false;        // set by applyFreezeFrame() — TERMINAL.
+                                          // Once true the ladder's floor has
+                                          // been hit: tick() checks this FIRST
+                                          // and stops rescheduling RAF entirely
+                                          // (see tick() below), and the resize
+                                          // + pause/resume message handlers
+                                          // both special-case it so nothing
+                                          // downstream can restart the loop.
+    let qgFreezeQueued   = false;        // set by qgRestore() below when the
+                                          // PERSISTED tier is the freeze rung
+                                          // but the scene isn't ready to be
+                                          // photographed yet (model still
+                                          // loading) — the __heroReady handler
+                                          // applies the freeze once it fires.
+    let qgSnowThinned    = false;        // set by applySnowThinned() —
+                                          // updateSnow's CPU loop reads this
+                                          // FLAG instead of a tier number,
+                                          // since the snow-thin step lands on
+                                          // a different tier per device class
+                                          // (desktop T2, touch T3).
+    let _qgFrameMin      = TOUCH_DEVICE ? (1000 / 60) : 0;
+                                          // touch: render-rate cap read by
+                                          // tick()'s frame gate (below).
+                                          // Starts at 60fps and is only ever
+                                          // LOWERED, by the touch ladder's
+                                          // T2/T3 fps-cap steps. Desktop: 0,
+                                          // unused — the tick() cap check
+                                          // itself is TOUCH_DEVICE-gated so
+                                          // this value never gets read there.
 
-    // T1 — halve the bloom pass's internal render targets. UnrealBloomPass
-    // already halves whatever size you hand its setSize (its mip0 targets
-    // are w/2 × h/2 of the resolution passed in — confirmed in the bundled
-    // source); passing the window's HALF dimensions here halves it again,
-    // landing the actual bloom buffers at a quarter of the window's linear
-    // resolution.
+    // T1 on both ladders — halve the bloom pass's internal render targets.
+    // UnrealBloomPass already halves whatever size you hand its setSize
+    // (its mip0 targets are w/2 × h/2 of the resolution passed in —
+    // confirmed in the bundled source); passing the window's HALF
+    // dimensions here halves it again, landing the actual bloom buffers
+    // at a quarter of the window's linear resolution.
     function applyBloomHalfRes() {
       bloomPass.setSize(Math.floor(window.innerWidth / 2), Math.floor(window.innerHeight / 2));
     }
 
-    // T2 — thin the marine snow to 40% of its particle count via
-    // setDrawRange (cheap: no reallocation, no re-upload, just fewer
-    // vertices submitted per frame). Guarded because snow is a
-    // greninja-only decoration — it's currently always created eagerly
-    // at module init (see the marine-snow block above) so this should
-    // never actually be null, but the guard costs nothing and protects
-    // against that changing later (e.g. a lazy spawn-on-mode-switch
-    // refactor) — if snow starts existing later, tier 2 still applies to
-    // it the next time this function runs.
+    // marine snow → 40% of its particle count via setDrawRange (cheap: no
+    // reallocation, no re-upload, just fewer vertices submitted per
+    // frame) + flip the qgSnowThinned flag that updateSnow's CPU loop
+    // reads (see updateSnow above) — desktop T2, touch T3 (ladder tables
+    // above). Guarded because snow is a greninja-only decoration — it's
+    // currently always created eagerly at module init (see the
+    // marine-snow block above) so this should never actually be null,
+    // but the guard costs nothing and protects against that changing
+    // later (e.g. a lazy spawn-on-mode-switch refactor) — if snow starts
+    // existing later, this tier still applies to it the next time this
+    // function runs.
     function applySnowThinned() {
+      qgSnowThinned = true;
       if (!snowMesh) return;
       snowMesh.geometry.setDrawRange(0, Math.floor(UW_MARINE_COUNT * QG_SNOW_THIN_FACTOR));
+    }
+
+    // transmission (glass-refraction) buffer scale → 0.6 — desktop T3,
+    // touch T4 (ladder tables above). Deliberately breaks the ≥2.0
+    // transmission sharpness bar documented on transmissionResolutionScale
+    // near the renderer setup — a struggling device would rather show
+    // soft "pk" letters than keep dropping frames.
+    function applyTransmissionReduced() {
+      renderer.transmissionResolutionScale = 0.6;
+      log('quality: transmission buffer → 0.6');
+    }
+
+    // device pixel ratio → max(1.0, current × 0.72) — last resort on both
+    // ladders (desktop T4, touch T5). Scaled off the CURRENT dpr (not
+    // clamped to a fixed cap) so it's a real cut at every starting point —
+    // a fixed 1.5 cap was a no-op on most desktops, which already ship at
+    // DPR_CAP 1.4: 2.0→1.44, 2.8→2.0, 1.4→1.0.
+    function applyDprStep() {
+      const target = Math.max(1.0, qgDPR * 0.72);
+      if (Math.abs(target - qgDPR) < 0.05) {
+        log('quality: DPR already at floor (' + qgDPR.toFixed(2) + '), skipping resize');
+        return;
+      }
+      qgDPR = target;
+      renderer.setPixelRatio(qgDPR);
+      composer.setPixelRatio(qgDPR);
+      applyResize();   // re-run setSize so every buffer actually shrinks
+      log('quality: DPR → ' + qgDPR.toFixed(2));
+    }
+
+    // touch-only — lower the render-rate cap that tick()'s frame gate
+    // enforces (see _qgFrameMin and the cap check near tick(), below).
+    // Cheaper to spend than any resolution or buffer change: this scene's
+    // motion is slow and ambient enough that fps isn't visible, so
+    // trimming it first buys real GPU/thermal headroom for zero perceived
+    // cost — the same "spend budget where it's seen" reasoning as
+    // restoring native DPR above.
+    function applyFpsCap(fps) {
+      _qgFrameMin = 1000 / fps;
+      log('quality: render-rate cap → ' + fps + 'fps');
+    }
+
+    // LAST rung on BOTH ladders (touch T6, desktop T5 — see the
+    // FREEZE-FRAME FLOOR note in the big comment block above). Every rung
+    // above this one spends something to buy budget back on a scene
+    // that's still live; this one gives up on "live" instead. Hide the
+    // moving parts, undo every earlier rung's compromise (free to — none
+    // of it costs anything once nothing renders every frame anymore),
+    // paint exactly one frame at full ship quality, and flip qgFrozen so
+    // tick() stops rescheduling RAF for the rest of the visit. TERMINAL:
+    // there is nothing past this tier and nothing left to measure once
+    // it's applied (see qgFrozen's declaration above and tick() below).
+    function applyFreezeFrame() {
+      if (model)         model.visible = false;   // the animated hero itself
+      if (greninjaModel) greninjaModel.visible = false; // gyarados-mode model —
+                                          // in gyarados mode `model` has
+                                          // already been scene.remove()'d
+                                          // (see switchPokemon) so hiding it
+                                          // alone misses the model actually
+                                          // sitting in the scene; hide both,
+                                          // null-guarded since either may
+                                          // never have loaded.
+      if (snowMesh) snowMesh.visible = false; // greninja-mode marine snow
+      // NOTE: the still this produces shows no pokemon at all, in EITHER
+      // mode — that's DELIBERATE (a crisp text-only hero beats a frozen
+      // mid-animation pose), not an oversight left over from hiding both.
+
+      // restore ship quality for the still — the frozen frame should be
+      // crisp, not whatever the ladder had degraded to on its way here.
+      // Each line is the literal inverse of one apply* function above;
+      // kept local rather than factored into per-rung undo callbacks
+      // since there's exactly one caller and it runs at most once.
+      qgDPR = DPR_CAP;
+      renderer.setPixelRatio(DPR_CAP);
+      composer.setPixelRatio(DPR_CAP);
+      renderer.transmissionResolutionScale = TOUCH_DEVICE ? 0.7 : 1.0;   // ship value — see renderer setup above
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      composer.setSize(window.innerWidth, window.innerHeight);
+      bloomPass.setSize(window.innerWidth, window.innerHeight);
+      // NOTE: deliberately NOT routed through applyResize() below — that
+      // helper re-applies half-res bloom whenever qgTier >= 1, and
+      // qgTier IS >= 1 here (freeze is a tier too), so calling it would
+      // silently undo the bloom restore on the very next line. applyResize
+      // itself special-cases qgFrozen for the same reason — see below.
+
+      qgFrozen = true;   // terminal — see declaration above.
+      composer.render();   // the one frame the still shows from here on.
+      log('quality: freeze-frame — scene stopped, one frame held at full ship quality');
     }
 
     /* ── resize ───────────────────────────────────────────────────── */
@@ -2559,53 +2802,71 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
       composer.setSize(window.innerWidth, window.innerHeight);
       bloomPass.setSize(window.innerWidth, window.innerHeight);
+      // frozen: there's no live tier to reapply — qgTier just holds the
+      // persisted freeze-rung number, and the still is supposed to stay
+      // at full ship quality (see applyFreezeFrame), not step back down
+      // to half-res bloom. Resize the still and repaint the one frame at
+      // its new size instead, and don't touch the RAF loop that
+      // applyFreezeFrame already stopped.
+      if (qgFrozen) {
+        composer.render();
+        return;
+      }
       // bloomPass.setSize() above always resets it to full res; if the
-      // governor already stepped down to half-res bloom (T1+), a resize
-      // would otherwise silently hand the cost back.
+      // governor already stepped down to half-res bloom (T1+ on either
+      // ladder — both put it at T1), a resize would otherwise silently
+      // hand the cost back.
       if (qgTier >= 1) applyBloomHalfRes();
     }
-    window.addEventListener('resize', applyResize);
+    // coalesce resize events through a single rAF: a window drag fires
+    // dozens of 'resize' events per second, and applyResize's qgFrozen
+    // branch renders synchronously — with no live RAF loop backstopping
+    // it (frozen stops rescheduling RAF, see tick() below), calling it
+    // once per raw event means dozens of full composer.render() calls per
+    // second for the length of the drag. `pending` collapses however many
+    // events land in one frame into exactly one applyResize() call.
+    let _qgResizePending = false;
+    function scheduleResize() {
+      if (_qgResizePending) return;
+      _qgResizePending = true;
+      requestAnimationFrame(() => { _qgResizePending = false; applyResize(); });
+    }
+    window.addEventListener('resize', scheduleResize);
 
-    // Cumulative: each call applies ONLY the newly-reached tier — the
-    // previous tiers' mutations are already sitting on the renderer /
-    // composer / meshes and don't need re-doing.
+    // Ladder tables + the reasoning behind the device-specific ordering
+    // live in the big comment block above. Cumulative: each call applies
+    // ONLY the newly-reached tier — the previous tiers' mutations are
+    // already sitting on the renderer / composer / meshes and don't need
+    // re-doing.
+    const QG_LADDER_TOUCH = [
+      applyBloomHalfRes,                              // T1 — bloom half-res
+      () => applyFpsCap(45),                          // T2 — 45fps cap
+      () => { applyFpsCap(30); applySnowThinned(); }, // T3 — 30fps cap + snow thin
+      applyTransmissionReduced,                       // T4 — transmission 0.6
+      applyDprStep,                                   // T5 — DPR ×0.72
+      applyFreezeFrame,                                // T6 — freeze-frame, last resort
+    ];
+    const QG_LADDER_DESKTOP = [
+      applyBloomHalfRes,        // T1 — bloom half-res
+      applySnowThinned,         // T2 — snow thin
+      applyTransmissionReduced, // T3 — transmission 0.6
+      applyDprStep,              // T4 — DPR ×0.72
+      applyFreezeFrame,          // T5 — freeze-frame, last resort
+    ];
+    const QG_LADDER   = TOUCH_DEVICE ? QG_LADDER_TOUCH : QG_LADDER_DESKTOP;
+    const QG_MAX_TIER = QG_LADDER.length;   // 6 on touch, 5 on desktop
+
     function applyQualityTier(tier) {
-      switch (tier) {
-        case 1:
-          applyBloomHalfRes();
-          log('quality tier 1: bloom → half res');
-          break;
-        case 2:
-          applySnowThinned();
-          log('quality tier 2: marine snow → 40%');
-          break;
-        case 3:
-          // see the LADDER comment above — deliberately breaks the ≥2.0
-          // transmission sharpness bar.
-          renderer.transmissionResolutionScale = 0.6;
-          log('quality tier 3: transmission buffer → 0.6');
-          break;
-        case 4: {
-          // min(qgDPR, 1.5) was a no-op on most desktops: DPR_CAP there is
-          // already 1.4 (see DPR_CAP above), so clamping to 1.5 never
-          // actually lowered it — yet applyResize() below still
-          // reallocated every buffer in the pipeline for zero benefit.
-          // Scale relative to the CURRENT DPR instead so every starting
-          // point sees a real cut: 2.0→1.44, 2.8→2.0, 1.4→1.0.
-          const target = Math.max(1.0, qgDPR * 0.72);
-          if (Math.abs(target - qgDPR) < 0.05) {
-            log('quality tier 4: DPR already at floor (' + qgDPR.toFixed(2) + '), skipping resize');
-            break;
-          }
-          qgDPR = target;
-          renderer.setPixelRatio(qgDPR);
-          composer.setPixelRatio(qgDPR);
-          applyResize();   // re-run setSize so every buffer actually shrinks
-          log('quality tier 4: DPR → ' + qgDPR.toFixed(2));
-          break;
-        }
+      const step = QG_LADDER[tier - 1];
+      if (step) step();
+      // freeze-frame gets its own suffixed console line — "the scene
+      // stopped" is a materially different event than "the scene got a
+      // bit cheaper," which is what every other rung's plain message says.
+      if (step === applyFreezeFrame) {
+        console.info('[hero] quality tier', tier, '(freeze-frame)');
+      } else {
+        console.info('[hero] quality tier', tier);
       }
-      console.info('[hero] quality tier', tier);
     }
 
     // Feed one frame's real delta to the governor. Two phases: a fast
@@ -2664,14 +2925,33 @@
       // jank. The window's smallest delta is a proxy for that real frame
       // interval (jank only ever makes deltas bigger, never smaller), so
       // pad it a little and budget against whichever number is looser.
+      // Same problem, same fix, for touch's own fps-cap tiers: once T2/T3
+      // has capped render rate to 45/30fps, well-behaved frames are
+      // ~22ms/~33ms apart BY DESIGN — a bare 18ms budget would misread
+      // the cap doing its job as the device struggling and death-spiral
+      // the rest of the ladder. minDelta alone already covers this case
+      // (it's the ACHIEVED interval, cap or no cap) — see the budget line
+      // below for why the declared cap itself (_qgFrameMin) doesn't also
+      // get a term here.
       const minDelta = qgSamples[0];
+      // _qgFrameMin (the DECLARED fps cap) dropped from this max() —
+      // minDelta already subsumes it and does so more honestly. Under an
+      // fps cap the OBSERVED minDelta reflects the interval the device
+      // actually ACHIEVES, while the declared cap can be unreachable on a
+      // mismatched refresh rate: a 45fps cap on a 60Hz panel achieves
+      // 30fps (33ms real interval), but the declared floor is only 26ms
+      // (1000/45 + 4) — budgeting against that unreachable 26ms floor was
+      // a guaranteed phantom step every single time, even with zero real
+      // jank on the device's side.
       const budget = Math.max(QG_BUDGET_MS, minDelta + QG_BUDGET_MARGIN);
       qgSamples.length = 0;
 
       if (median <= budget) {
+        qgFreezeStrikes = 0;   // under budget — any streak toward the
+                                // freeze threshold was a blip, not a trend.
         if (!qgWatchdog) {
           qgWatchdog = true;
-          try { sessionStorage.setItem(QG_STORAGE_KEY, String(qgTier)); } catch (err) {}
+          try { sessionStorage.setItem(QG_STORAGE_KEY, (TOUCH_DEVICE ? 't' : 'd') + qgTier); } catch (err) {}
           log('quality settled at tier ' + qgTier + ' (median ' + median.toFixed(1) + 'ms, budget ' + budget.toFixed(1) + 'ms)');
           console.info('[hero] quality tier', qgTier);
         }
@@ -2681,13 +2961,39 @@
         return;
       }
 
+      // stepping INTO the terminal freeze rung is a one-way door for the
+      // rest of the session (see qgFrozen), so it alone needs a second
+      // opinion — a single over-budget window here can be a
+      // background-tab compositor hiccup or a momentary thermal spike,
+      // not a real steady-state ceiling. Arm on the first bad window at
+      // the threshold, re-measure at the SAME tier, and only commit on a
+      // second consecutive bad window. Every other step on the ladder
+      // stays one-window-and-go, same as before — it's reversible in the
+      // sense that there's always a rung below to fall back to; this one
+      // isn't.
+      if (qgTier + 1 >= QG_MAX_TIER) {
+        qgFreezeStrikes++;
+        if (qgFreezeStrikes < 2) {
+          log('quality: freeze threshold hit (' + qgFreezeStrikes + '/2) — re-measuring before committing (median ' + median.toFixed(1) + 'ms, budget ' + budget.toFixed(1) + 'ms)');
+          qgSampleTarget = qgWatchdog ? QG_SAMPLE_WATCH : QG_SAMPLE_RETRY;
+          return;
+        }
+      }
+
       qgTier++;
       applyQualityTier(qgTier);
       qgWarmupUntil = qgRenderedFrames + QG_REWARMUP_FRAMES;   // skip the realloc jank a step itself causes
-      try { sessionStorage.setItem(QG_STORAGE_KEY, String(qgTier)); } catch (err) {}   // persist on every step, calibration or watchdog
+      // class-prefixed ('t'/'d') so a restore can tell which ladder a
+      // stored value belongs to — see qgRestore below.
+      try { sessionStorage.setItem(QG_STORAGE_KEY, (TOUCH_DEVICE ? 't' : 'd') + qgTier); } catch (err) {}   // persist on every step, calibration or watchdog
 
       if (qgTier >= QG_MAX_TIER) {
-        log('quality ladder exhausted at tier ' + qgTier + ' (median ' + median.toFixed(1) + 'ms, still over budget ' + budget.toFixed(1) + 'ms)');
+        // last tier is always freeze-frame (see QG_LADDER above) — the
+        // applyQualityTier() call just above already hid the model,
+        // restored ship quality, rendered the one frame, and set
+        // qgFrozen. Nothing left to measure; qgTick simply never gets
+        // called again (tick() stops rescheduling RAF once frozen).
+        log('quality ladder exhausted at tier ' + qgTier + ' (median ' + median.toFixed(1) + 'ms, still over budget ' + budget.toFixed(1) + 'ms) — froze at full quality');
         return;
       }
       // shorter re-check while still calibrating; stay on the slow window
@@ -2703,16 +3009,57 @@
       let stored = null;
       try { stored = sessionStorage.getItem(QG_STORAGE_KEY); } catch (err) {}
       if (stored === null) return;
-      const restored = Math.min(QG_MAX_TIER, Math.max(0, parseInt(stored, 10) || 0));
-      // qgTier must be set BEFORE each apply, not after the loop —
-      // applyQualityTier(4)'s applyResize() reads `qgTier >= 1` to decide
-      // whether to re-apply half-res bloom (see applyResize above), so
-      // restoring straight to tier 4 with qgTier still sitting at its
-      // default 0 was reading the bloom buffer back up to full res on
-      // every resize.
-      for (let t = 1; t <= restored; t++) {
+      // tier NUMBERS mean different rungs per device class (see the ladder
+      // tables above) — a value written as 't3' (touch: 30fps cap + snow
+      // thin) misapplied as desktop tier 3 (transmission 0.6) means
+      // something else entirely. TOUCH_DEVICE reflects the PRIMARY input
+      // mechanism and can actually change within a session on a hybrid
+      // device (e.g. a Surface used with a mouse, then undocked to touch),
+      // so the class prefix written alongside every tier (see qgTick) is
+      // checked here, not assumed from the key bump alone. Mismatch, or a
+      // value with no recognizable prefix at all (pre-this-scheme junk),
+      // discards the stored value outright rather than guessing.
+      const cls = stored[0];
+      if (cls !== 't' && cls !== 'd') {
+        try { sessionStorage.removeItem(QG_STORAGE_KEY); } catch (err) {}
+        return;
+      }
+      if (cls !== (TOUCH_DEVICE ? 't' : 'd')) {
+        try { sessionStorage.removeItem(QG_STORAGE_KEY); } catch (err) {}
+        return;
+      }
+      const restored = Math.min(QG_MAX_TIER, Math.max(0, parseInt(stored.slice(1), 10) || 0));
+      // freeze-frame is always the ladder's last tier (see QG_LADDER
+      // above), and applyFreezeFrame() renders its one frame and reads
+      // window.innerWidth/Height — it needs the model actually in the
+      // scene and shaders compiled to be worth anything, neither of
+      // which is true this early (this IIFE runs at module init, well
+      // before the GLTF load's onLoad/__heroReady fires). So: apply
+      // every rung UP TO but NOT INCLUDING freeze immediately (cheap,
+      // scene-independent — bloom/snow/transmission/DPR all just mutate
+      // renderer/composer state), and queue the freeze rung itself for
+      // the __heroReady handler (see the loader's onLoad above) to apply
+      // once the scene is actually ready to be photographed.
+      const isFreeze    = restored === QG_MAX_TIER;
+      const liveCeiling = isFreeze ? restored - 1 : restored;
+      // qgTier must be set BEFORE each apply, not after the loop — the
+      // DPR tier's applyDprStep()→applyResize() reads `qgTier >= 1` to
+      // decide whether to re-apply half-res bloom (see applyResize
+      // above), so restoring straight to the max tier with qgTier still
+      // sitting at its default 0 was reading the bloom buffer back up to
+      // full res on every resize.
+      for (let t = 1; t <= liveCeiling; t++) {
         qgTier = t;
         applyQualityTier(t);
+      }
+      if (isFreeze) {
+        // don't touch qgTier/qgFrozen yet — the __heroReady handler sets
+        // qgTier = QG_MAX_TIER and calls applyQualityTier(QG_MAX_TIER)
+        // itself once it's safe to. No watchdog: freeze is terminal, and
+        // it hasn't actually happened yet on this load.
+        qgFreezeQueued = true;
+        log('quality tier restored: ' + liveCeiling + ' (freeze-frame queued for heroReady)');
+        return;
       }
       // skip calibration entirely and go straight into the slow watchdog
       // (see qgTick above) so a regression on an already-restored tier
@@ -2805,21 +3152,68 @@
     // renderMode drives the tick's frame-gating below.
     let renderMode = 'resume';
     let lastFrameT = 0;
+    let _qgLastRender = 0;   // timestamp of the last frame that actually
+                              // rendered — separate from lastFrameT above so
+                              // the 60fps touch cap (see tick() below) and
+                              // the pause/throttle gate can each reason about
+                              // "time since last render" independently; both
+                              // land on the same value in practice since both
+                              // only update once a frame clears every gate.
+    let _qgLastTick = 0;     // timestamp of the last tick() CALL, gated or
+                              // not — raw RAF cadence, unlike _qgLastRender
+                              // above which only moves on frames that
+                              // actually rendered. Feeds _qgTickMin below.
+    let _qgTickMin   = 1000 / 60;   // smallest recent raw RAF delta — a
+                              // cheap proxy for the display's real refresh
+                              // interval (120Hz ≈ 8.33ms, 90Hz ≈ 11.11ms,
+                              // ...). Decays toward each new raw delta, but
+                              // snaps down INSTANTLY on a new low (jitter
+                              // only ever makes a delta bigger than the true
+                              // interval, never smaller, so a lower reading
+                              // is always more trustworthy) — the same
+                              // asymmetric logic the governor's own budget
+                              // calc uses for minDelta above. Read by the
+                              // frame-cap tolerance in tick() below.
     // (adaptive quality governor state lives near the resize handler above —
     // it's fed a delta each tick below)
     window.addEventListener('message', (e) => {
       const action = e.data && e.data.__heroAction;
       if (action === 'pause' || action === 'throttle' || action === 'resume') {
         renderMode = action;
+        // frozen: the RAF loop is permanently stopped (see qgFrozen /
+        // applyFreezeFrame / tick() below) — there's no live scene left to
+        // pause or resume, so 'resume' must NOT restart it. At most
+        // repaint the still: a backgrounded canvas's compositor backing
+        // layer can get dropped while off-screen and needs repainting on
+        // return (an ordinary compositing optimization, NOT a WebGL
+        // context loss — that's a separate event with its own handlers,
+        // see below) — cheap, and never reschedules anything.
+        if (qgFrozen && action === 'resume') { try { composer.render(); } catch (err) {} }
       } else if (action === 'switchPokemon') {
         // parent's switch button (the iframe's own toggle is hidden when
-        // embedded) → flip rayquaza ↔ gyarados.
+        // embedded) → flip rayquaza ↔ gyarados. switchPokemon() itself
+        // no-ops while frozen (see its qgFrozen guard, above).
         try { switchPokemon(); } catch (err) {}
       } else if (e.data && e.data.__heroClick) {
         // parent forwards click coords as NDC (iframe is pointer-events:none
         // when embedded, so the parent captures the pointer for us).
         window.__heroClick = e.data.__heroClick;
       }
+    });
+
+    // real WebGL context-loss handling — a genuinely different event from
+    // the dropped-compositor-layer repaint above (that one's a backing
+    // surface getting evicted while backgrounded; this is the GPU context
+    // itself being torn down, e.g. a driver reset or the browser reclaiming
+    // GPU memory under pressure). preventDefault() on loss is required for
+    // the browser to fire 'webglcontextrestored' at all — without it the
+    // context is gone for good. On restore: a frozen scene has no live RAF
+    // loop left to repaint itself, so paint the one still frame again;
+    // a live scene needs nothing here since the next tick() frame repaints
+    // it naturally.
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); });
+    canvas.addEventListener('webglcontextrestored', () => {
+      if (qgFrozen) { try { composer.render(); } catch (err) {} }
     });
 
     // when viewed STANDALONE (not embedded) the iframe is NOT pointer-events:
@@ -2837,8 +3231,64 @@
     }, { passive: true });
 
     function tick(now) {
+      // terminal — freeze-frame already rendered the one frame the still
+      // shows forever (see applyFreezeFrame above); don't reschedule RAF
+      // at all, checked before anything else in this function so a
+      // frozen scene truly stops costing anything, sustained.
+      if (qgFrozen) return;
       requestAnimationFrame(tick);
       now = now || 0;
+      // 60fps hard cap, touch only, checked FIRST (before even the
+      // pause/throttle gate below) — this is where DPR_CAP's restored
+      // sharpness gets paid for. Crispness is visible every single frame;
+      // frame rate on this slow ambient orbit is not (nothing here moves
+      // fast enough for a human eye to tell 90fps from 60fps apart) — so a
+      // ProMotion phone firing RAF at 120Hz was rendering, and heating,
+      // literally 2x the frames of a 60Hz phone for a visually IDENTICAL
+      // result. Cap render RATE instead of cutting resolution. All scene
+      // motion below is driven off clock.getElapsedTime() / real
+      // elapsed-time deltas (mixDt, the gyarados/flight path-follow rigs'
+      // own dt tracking, etc.) rather than a frame counter, so skipping
+      // ticks changes how often we draw, never how fast the animation
+      // plays — a capped device just draws fewer, evenly-spaced frames of
+      // the same motion. _qgFrameMin starts at 1000/60 and is only ever
+      // lowered further by the touch ladder's T2/T3 fps-cap steps (see
+      // applyFpsCap near the governor above); it's unused on desktop.
+      //
+      // SUBMULTIPLE REALITY: a display can only actually deliver RAF ticks
+      // at its own refresh interval and integer multiples of it — a 90Hz
+      // panel physically cannot land a tick at 60Hz's 16.67ms mark, only
+      // at 11.11ms (every tick, 90fps) or 22.22ms (every 2nd tick, 45fps).
+      // There is no way to hit the cap exactly, only to round to whichever
+      // achievable interval is closest. A FIXED tolerance (previously a
+      // flat 2ms) doesn't scale with tick spacing, so it rounds correctly
+      // only near the tick spacing it was tuned for (120Hz, 8.33ms ticks —
+      // fine) and silently mis-rounds everywhere else: 90Hz landed on
+      // 45fps as a coincidence of its own math, not by design, and 144Hz
+      // (6.94ms ticks) rounded down to 48fps when the closer achievable
+      // rate is 72fps. HALF-TICK tolerance fixes this generally: the
+      // threshold backs off by half of `_qgTickMin` (the smallest recent
+      // raw RAF delta, tracked below — a live proxy for the display's
+      // actual refresh interval) instead of a flat constant, which is
+      // exactly the boundary for "round to the nearest achievable tick
+      // multiple." Verified: 120Hz→60fps, 90Hz→45fps, 144Hz→72fps.
+      if (TOUCH_DEVICE) {
+        // raw RAF cadence — updated every tick() call, gated or not,
+        // unlike _qgLastRender below which only moves on rendered frames.
+        // Skipped on the very first call (_qgLastTick starts at 0, which
+        // would otherwise read as one enormous "delta" since page load and
+        // yank _qgTickMin's decay way off). QG_OUTLIER_MS also guards a
+        // tab-hidden/devtools gap from doing the same on any later call.
+        if (_qgLastTick > 0) {
+          const rawDelta = now - _qgLastTick;
+          if (rawDelta > 0 && rawDelta < QG_OUTLIER_MS) {
+            if (rawDelta < _qgTickMin) _qgTickMin = rawDelta;          // new low — snap down instantly; jitter only ever makes a delta BIGGER than the true interval, never smaller
+            else _qgTickMin += (rawDelta - _qgTickMin) * 0.02;         // decay up slowly, e.g. a window dragged to a different-refresh-rate monitor
+          }
+        }
+        _qgLastTick = now;
+      }
+      if (TOUCH_DEVICE && now - _qgLastRender < _qgFrameMin - _qgTickMin / 2) return;
       // frame-gating per mode. NOTE: 'pause' is a TRICKLE (~5fps), not a
       // hard stop — keeps the WebGL shaders warm and the compositor layer
       // promoted, so scrolling BACK to the hero resumes instantly instead
@@ -2847,6 +3297,10 @@
       else if (renderMode === 'throttle') { if (now - lastFrameT < 48) return; } // ~20fps
       const _prevFrameT = lastFrameT;
       lastFrameT = now;
+      _qgLastRender = now;   // this frame is committed to rendering past this
+                              // point — mirrors lastFrameT so both "time
+                              // since last render" trackers only ever
+                              // advance on frames that actually draw.
 
       // adaptive quality governor — measures this frame's real delta and
       // steps the quality ladder down if the device can't hold budget
@@ -2856,6 +3310,14 @@
       // branch check once the ladder's exhausted, so this is effectively
       // free on a maxed-out device for the rest of the visit.
       qgTick(now - _prevFrameT);
+      // qgTick can itself trigger the freeze-frame rung mid-call (a live
+      // step-down that lands on the ladder's last tier — see qgTick
+      // above). If it just did, applyFreezeFrame() already rendered the
+      // one frame the still shows forever; bail out here so the rest of
+      // THIS tick doesn't mutate bone transforms / re-render on top of
+      // it — the RAF loop itself stops on the NEXT call (see the
+      // qgFrozen check at the top of tick(), above).
+      if (qgFrozen) return;
       const t = clock.getElapsedTime();
       // mixer delta — independent of window.__lastT (which the lightning
       // block also uses). clamped so a tab-resume / throttle gap doesn't
