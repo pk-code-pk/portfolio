@@ -762,9 +762,9 @@
     /* (lightning system removed — the letters now carry a steady soft
        glow instead; see the edge-glow block in installWetGlass. That glow
        used to also pick up a soft bloom halo from UnrealBloomPass — now
-       removed, see the composer setup below — so a static baked
-       substitute (bakeLetterGlow) restores the halo without a per-frame
-       blur; see where pkText is built, further below.) */
+       removed, see the composer setup below. A baked halo sprite was
+       tried as a substitute and looked worse than nothing; the letters'
+       own per-pixel fresnel rim is the whole glow now, by choice.) */
 
     /* ══════════════════════════════════════════════════════════════════
        GRENINJA WORLD — water/ninja theme. Everything here is built once
@@ -1233,12 +1233,11 @@
        and the glass letters' fresnel edges. That per-frame cost bought a
        largely STATIC effect — the letters don't move, and the model's
        highlights track the fixed sun/moon direction, not fast motion — so
-       it was paying full-frame-blur money for something a one-time bake
-       could deliver instead. The letters' soft edge halo is now a static
-       baked substitute (see bakeLetterGlow, installed on pkText below);
-       the model's bloom-driven specular flare has no replacement — the
-       body goes back to crisp unblurred highlights, a deliberate,
-       user-approved trade for killing the per-frame chain. )
+       it was paying full-frame-blur money for a largely static look.
+       Neither has a replacement: a baked halo sprite for the letters was
+       tried and rejected on sight, and the model's bloom-driven specular
+       flare goes back to crisp unblurred highlights — both deliberate,
+       user-approved trades for killing the per-frame chain. )
        The per-pixel fresnel/moonlit rim light injected directly into the
        glass shader (see installWetGlass's edge-glow block, further below)
        is untouched by this — it was never bloom, just ordinary forward
@@ -1548,210 +1547,6 @@
       mat.needsUpdate = true;
     }
 
-    /* ── baked letter glow (static substitute for the removed bloom) ──
-       UnrealBloomPass used to put a soft halo around the pk letters'
-       bright fresnel/moonlit edges by re-blurring the WHOLE frame every
-       tick. The letters never move (pkText is positioned once at load
-       and never touched again — see below) and their glow is driven by a
-       fixed sun/moon direction, so nothing about that halo actually
-       changes frame to frame. Bake it ONCE instead: render the letter
-       silhouette to a small offscreen target, blur it a few passes
-       (also one-time), and drop the result on a static additive quad
-       parented to pkText, screen-composited on TOP of the letters
-       (depthTest off, renderOrder above them) at low opacity — the
-       standard game-UI glow-sprite trick. (Originally this quad sat
-       *behind* the glass at bbox.min.z with only depthWrite disabled,
-       meant to read as light bleeding out from under the glass. That
-       premise fails twice over: depthTest was still on, so the quad got
-       clipped wherever it overlapped the opaque-ish letter geometry, and
-       three.js's transmission pass excludes transparent objects — this
-       quad included — from what the glass refracts, so it could never
-       have shown up "through" the glass either. Compositing on top
-       sidesteps both problems and is how glow sprites are done anyway.)
-       Steady-state cost after init: one extra draw call, no shader, no
-       per-frame blur.
-       (Considered instead: an additive "shell" clone of the letter mesh,
-       scaled up ~6% with low-opacity additive material. Simpler, but a
-       raw scaled duplicate reads as a hard-edged double image rather
-       than a soft halo — the letters' fresnel rim is thin and crisp, so
-       a shell just doubles the outline instead of softening it. The
-       render-target bake costs more code but is the one that actually
-       looks like glow, and it's still a fixed one-time cost.) */
-    function bakeLetterGlow(geometry, parent) {
-      geometry.computeBoundingBox();
-      const bbox = geometry.boundingBox;
-      const sizeX = bbox.max.x - bbox.min.x;
-      const sizeY = bbox.max.y - bbox.min.y;
-      const cx = (bbox.max.x + bbox.min.x) / 2;
-      const cy = (bbox.max.y + bbox.min.y) / 2;
-      // frame wider than the letters themselves so the blur has room to
-      // spread outward without clipping against the render target edge.
-      const PAD  = 1.6;
-      const halfW = (sizeX * PAD) / 2;
-      const halfH = (sizeY * PAD) / 2;
-
-      // small offscreen target — this is a one-time bake, not a
-      // per-frame buffer, so resolution just needs to be enough that the
-      // blurred result doesn't look pixelated at the letters' on-screen
-      // size (small hero element, viewed from a fixed distance).
-      const RT_W = 512;
-      const RT_H = Math.max(128, Math.min(512, Math.round(RT_W * (halfH / halfW))));
-      // clamping RT_H to [128, 512] keeps the blur isotropic (same texel
-      // spread in both directions) only because the quad this glow is
-      // baked for is wide-and-short like "pk" — RT aspect tracks quad
-      // aspect exactly up to the clamp. A tall/narrow string would clamp
-      // RT_H toward 512 while the quad stays narrow, skewing the blur
-      // (fine here; only matters if this is reused for other strings).
-      const rtOpts = {
-        depthBuffer: false, stencilBuffer: false, generateMipmaps: false,
-        minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter
-      };
-      let rtA = new THREE.WebGLRenderTarget(RT_W, RT_H, rtOpts);
-      let rtB = new THREE.WebGLRenderTarget(RT_W, RT_H, rtOpts);
-
-      // pass 1: render the letters as a bright unlit silhouette (cool
-      // white-blue, matching the moonlit rim tint already used in the
-      // glass shader above) against a transparent background.
-      const silScene = new THREE.Scene();
-      const silMat  = new THREE.MeshBasicMaterial({ color: 0xcfe0ff });
-      const silMesh = new THREE.Mesh(geometry, silMat);
-      silScene.add(silMesh);
-      const bakeCam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, 0.1, 20);
-      bakeCam.position.set(cx, cy, 10);
-      bakeCam.lookAt(cx, cy, 0);
-
-      const prevTarget = renderer.getRenderTarget();
-      const prevClear  = new THREE.Color();
-      renderer.getClearColor(prevClear);
-      const prevAlpha  = renderer.getClearAlpha();
-      renderer.setClearColor(0x000000, 0);
-      renderer.setRenderTarget(rtA);
-      renderer.clear(true, true, true);
-      renderer.render(silScene, bakeCam);
-
-      // passes 2..N: separable gaussian blur, ping-ponged horizontal then
-      // vertical. Fixed cost paid once here, never again — this is the
-      // whole reason a bake beats a per-frame post-process pass.
-      const blurScene = new THREE.Scene();
-      const blurCam   = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-      const blurUniforms = {
-        tDiffuse: { value: null },
-        dir:      { value: new THREE.Vector2(1, 0) },
-        texel:    { value: new THREE.Vector2(1 / RT_W, 1 / RT_H) },
-        dilate:   { value: 1 }
-      };
-      const blurQuad = new THREE.Mesh(
-        new THREE.PlaneGeometry(2, 2),
-        new THREE.ShaderMaterial({
-          uniforms: blurUniforms,
-          vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-          fragmentShader: `
-            uniform sampler2D tDiffuse; uniform vec2 dir; uniform vec2 texel;
-            uniform float dilate; varying vec2 vUv;
-            void main(){
-              // 5-tap linear-sampled gaussian (blurs 9 texels for the
-              // cost of 5 fetches) — standard collapsed-weights kernel.
-              // dilate grows the tap spacing (à-trous style) across
-              // ping-pong iterations instead of resampling a fixed
-              // 3-texel spread over and over, so the spread actually
-              // widens into a halo instead of just softening the edge.
-              vec4 sum = texture2D(tDiffuse, vUv) * 0.2270270270;
-              vec2 off1 = dir * texel * dilate * 1.3846153846;
-              vec2 off2 = dir * texel * dilate * 3.2307692308;
-              sum += texture2D(tDiffuse, vUv + off1) * 0.3162162162;
-              sum += texture2D(tDiffuse, vUv - off1) * 0.3162162162;
-              sum += texture2D(tDiffuse, vUv + off2) * 0.0702702703;
-              sum += texture2D(tDiffuse, vUv - off2) * 0.0702702703;
-              gl_FragColor = sum;
-            }`
-        })
-      );
-      blurScene.add(blurQuad);
-
-      // dilated (à-trous) separable blur: same 5-tap kernel each pass,
-      // but the tap offset doubles every ping-pong iteration (1,2,4,8×
-      // the base texel) instead of staying fixed. A fixed-offset kernel
-      // re-applied 3x only ever reaches ~3 texels of spread — a near-
-      // sharp silhouette, not a halo. Growing the spread across passes
-      // gets a wide, soft falloff for the same 4-iteration cost.
-      const DILATIONS = [1, 2, 4, 8];
-      let src = rtA, dst = rtB;
-      for (let i = 0; i < DILATIONS.length; i++) {
-        blurUniforms.dilate.value = DILATIONS[i];
-
-        blurUniforms.tDiffuse.value = src.texture;
-        blurUniforms.dir.value.set(1, 0);
-        renderer.setRenderTarget(dst);
-        renderer.clear(true, true, true);
-        renderer.render(blurScene, blurCam);
-        [src, dst] = [dst, src];
-
-        blurUniforms.tDiffuse.value = src.texture;
-        blurUniforms.dir.value.set(0, 1);
-        renderer.setRenderTarget(dst);
-        renderer.clear(true, true, true);
-        renderer.render(blurScene, blurCam);
-        [src, dst] = [dst, src];
-      }
-
-      renderer.setRenderTarget(prevTarget);
-      renderer.setClearColor(prevClear, prevAlpha);
-
-      // `src` holds the final blurred result — keep its render target
-      // alive (its .texture is what the glow quad displays); dispose only
-      // the other one, plus the one-time bake scaffolding.
-      (src === rtA ? rtB : rtA).dispose();
-      silMat.dispose();
-      blurQuad.geometry.dispose();
-      blurQuad.material.dispose();
-
-      // full-strength additive would just paint a solid white letter-
-      // shaped slab (the blurred silhouette is still ~opaque near its
-      // core); dialled down so the wide dilated blur's soft edge reads
-      // as a bloom-like wash instead of a hard glowing cutout. Named so
-      // it's a one-line tune, not a buried magic number.
-      const GLOW_OPACITY = 0.12;
-      // draws after the letters regardless of transparent-queue depth
-      // sort — see renderOrder below, and the comment on this function.
-      const GLOW_RENDER_ORDER = 10;
-      const glowMat = new THREE.MeshBasicMaterial({
-        map: src.texture,
-        transparent: true,
-        opacity: GLOW_OPACITY,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        // screen-composited on top of the letters (see function-level
-        // comment) — depth testing against the letter geometry is
-        // exactly the bug this fixes, so it's off, not just depth write.
-        depthTest: false,
-        // CRITICAL: exempt from scene.fog, same reasoning as the glass
-        // material below — underwater FogExp2 would tint this quad while
-        // the letters themselves stay exempt, breaking the match between
-        // the glow and the thing it's supposed to be glowing around.
-        fog: false
-      });
-      const glowMesh = new THREE.Mesh(new THREE.PlaneGeometry(halfW * 2, halfH * 2), glowMat);
-      // no longer "behind the glass" — transmission excludes transparent
-      // objects from what it refracts, and depthWrite-only left the quad
-      // depth-rejected wherever it overlapped the letters, so a behind-
-      // the-glass halo was never actually achievable. This is a top-
-      // composited glow sprite instead (depthTest off + renderOrder
-      // above the letters, both set here) — the standard game-UI trick
-      // for a halo around bright geometry. Positioned at the letters'
-      // bbox CENTER z (not pushed behind to bbox.min.z) so its plane
-      // projects at very nearly the same on-screen size as the letters
-      // from the camera; a small further scale-up covers the residual
-      // parallax gap since z no longer affects occlusion, only alignment.
-      const cz = (bbox.max.z + bbox.min.z) / 2;
-      glowMesh.position.set(cx, cy, cz);
-      glowMesh.scale.set(1.04, 1.04, 1);
-      glowMesh.renderOrder = GLOW_RENDER_ORDER;
-      // parented to pkText, not added to the scene directly — pkText
-      // never moves after creation, so this rides along for free with
-      // zero per-frame work of its own even if that ever changes.
-      parent.add(glowMesh);
-    }
-
     /* ── pk logo (loaded in parallel with model) ──────────────────── */
     let pkText = null;
     new FontLoader().load(
@@ -1842,7 +1637,6 @@
         pkText = new THREE.Mesh(smoothed, mat);
         if (model) pkText.position.copy(modelCenter);
         scene.add(pkText);
-        bakeLetterGlow(smoothed, pkText);   // static substitute for the removed bloom halo
       }
     );
 
