@@ -357,22 +357,23 @@
     // load (bloom + nebula + transmission are all per-pixel heavy), the
     // single biggest win against mobile scroll jank.
     const TOUCH_DEVICE = window.matchMedia('(hover: none), (pointer: coarse)').matches;
-    // touch: NATIVE DPR (phones are DPR 3 — anything less is upscaled and
-    // reads as soft/pixely edges next to the razor-sharp DOM text around
-    // it). Desktop: native × 1.4 SUPERSAMPLE (capped 2.8) — renders above
+    // touch: capped at 2 — native (DPR 3 phones) was tried and cooked the
+    // phone: 9x the fragment work of DPR 1, at 120Hz on ProMotion. DPR 2
+    // keeps edges sharp on a ~390pt viewport at 4/9 the pixel cost.
+    // Desktop: native × 1.4 SUPERSAMPLE (capped 2.8) — renders above
     // the physical grid and downscales, which is what makes the glass
     // letters read "crispy" rather than merely correct; desktop GPUs have
     // the headroom. Resolution is constant for the whole visit — the
     // relief valve only ever touches the transmission buffer.
     const DPR_CAP = TOUCH_DEVICE
-      ? (window.devicePixelRatio || 2)
+      ? Math.min(window.devicePixelRatio || 2, 2)
       : Math.min((window.devicePixelRatio || 1) * 1.4, 2.8);
     // antialias:false — EffectComposer renders to its own MSAA render targets;
     // the renderer's native AA applies only to the default framebuffer which
     // the composer never uses. MSAA on composer.renderTarget1/2 handles AA.
     // powerPreference hints OS to use discrete GPU on dual-GPU machines.
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
-    // DPR_CAP is the FULL target (touch: native; desktop: 1.4× native
+    // DPR_CAP is the FULL target (touch: min(native,2); desktop: 1.4× native
     // supersample) — no min() against native or the supersample would be
     // clamped away.
     renderer.setPixelRatio(DPR_CAP);
@@ -391,8 +392,8 @@
     // full second scene render per frame. Rule: its EFFECTIVE resolution
     // (scale × DPR) must stay ≥ 2.0 — the sharpness bar the letters need.
     //   desktop: 1.0 × DPR2   = 2.0
-    //   touch:   0.7 × DPR3   = 2.1  (scene render at half the pixels)
-    renderer.transmissionResolutionScale = TOUCH_DEVICE ? 0.7 : 1.0;
+    //   touch:   1.0 × DPR2   = 2.0  (DPR now capped at 2 on touch)
+    renderer.transmissionResolutionScale = 1.0;
 
     /* ── scene ─────────────────────────────────────────────────────── */
     const scene  = new THREE.Scene();
@@ -1609,7 +1610,7 @@
     let model       = null;
     let bodyChain   = [];   // ordered head → spine → tail, full chain
     let jaw         = null;
-    let tailTip     = null;   // terminal tail bone (not in the driven chain)
+    let tailWhip    = [];     // last skin-weighted tail bones (tip flick)
     let arms        = { L: [], R: [] };
     let modelCenter = new THREE.Vector3();
 
@@ -1754,16 +1755,14 @@
         arms.L = arms_L;
         arms.R = arms_R;
 
-        // the terminal tail bone is deliberately EXCLUDED from the driven
-        // chain (the `_end_` filter), so nothing ever rotated it — the last
-        // segment of the tail was a rigid spike that translated with the
-        // body but never flexed. Grab it so it can be given a trailing flick.
-        model.traverse(o => {
-          if (o.isBone && /^Tail\d+_.*_end_/.test(o.name)) tailTip = o;
-        });
+        // The `_end_` bone carries ZERO skin weight (verified against every
+        // mesh's skinIndex/skinWeight) — it's a leaf marker, so rotating it
+        // deforms nothing. The visible tip is driven by the last two real
+        // tail bones, so those are what get the flick.
+        tailWhip = found.tail.slice(-2).reverse();   // [last, second-to-last]
 
         // snapshot rest rotations so animations are additive offsets
-        [...bodyChain, jaw, tailTip, ...arms.L, ...arms.R].filter(Boolean).forEach(b => {
+        [...bodyChain, jaw, ...arms.L, ...arms.R].filter(Boolean).forEach(b => {
           b.userData.rest = { x: b.rotation.x, y: b.rotation.y, z: b.rotation.z };
         });
 
@@ -2480,7 +2479,9 @@
     let   _rqLastToggle = -999;             // debounce: ignore repeat clicks within 300ms
     const _rqHeadUp = new THREE.Vector3(0, 1, 0);  // transported up carried across frames
     const _rqAnchor = new THREE.Vector3();  // full-flight model.position that lands junction on curve
-    const _rqIdleP  = new THREE.Vector3();  // idle float target position
+    const _rqIdleP  = new THREE.Vector3();
+    const _tipEul   = new THREE.Euler();       // tail-tip flick scratch
+    const _tipQ     = new THREE.Quaternion();  // idle float target position
 
     // (#1) parent posts {__heroAction:'pause'|'throttle'|'resume'}:
     //   pause    → fully off-screen: stop rendering entirely.
@@ -3314,14 +3315,21 @@
            rather than moving in lockstep. Amplitude is modest at rest and
            opens up in flight. Applied after the pose above, so it layers
            on top of whichever system is driving the body. */
-        if (tailTip && tailTip.userData.rest) {
-          const rest  = tailTip.userData.rest;
+        if (tailWhip.length) {
           const lagPh = omega * (t - 0.26) - k * (N + 1.3);
           const whip  = Math.sin(lagPh) * 0.62 + Math.sin(lagPh * 1.9 + 0.7) * 0.3;
-          const amt   = 0.34 * (0.5 + 0.5 * rqBlend);
-          tailTip.rotation.x = rest.x + whip * amt * 0.55;
-          tailTip.rotation.y = rest.y + whip * amt;
-          tailTip.rotation.z = rest.z + Math.sin(lagPh * 0.75 + 1.1) * amt * 0.45;
+          const amt   = 0.40 * (0.55 + 0.45 * rqBlend);
+          // multiplied ON TOP of the pose already set by the idle wave or
+          // the flight rig, so neither system is disturbed — this is a
+          // delta, not a replacement.
+          for (let i = 0; i < tailWhip.length; i++) {
+            const f = i === 0 ? 1.0 : 0.5;      // very last bone whips hardest
+            _tipEul.set(whip * amt * 0.5 * f,
+                        whip * amt * f,
+                        Math.sin(lagPh * 0.75 + 1.1) * amt * 0.45 * f);
+            _tipQ.setFromEuler(_tipEul);
+            tailWhip[i].quaternion.multiply(_tipQ);
+          }
         }
 
         /* ── BALLISTIC SCREECH ──────────────────────────────────────
