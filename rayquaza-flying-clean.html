@@ -1904,27 +1904,28 @@
             found.head.userData.rqRestLocal = found.head.quaternion.clone();
           }
 
-          // ── build the FLIGHT CURVE — a distinct 3D orbit around the letters
-          // (NOT a figure-8): a single non-self-crossing ring in screen-XY that
-          // also dives in front of / climbs behind the text (Z weave) and rolls
-          // its height (Y harmonic) so it reads as a dragon banking through the
-          // air. Sized so curveLength ≈ 2.2× bodyArc → body fills ~45% of the
-          // loop: head clearly LEADS, tail clearly TRAILS on the same track.
-          // The letters are SOLID, so the path must wrap around them rather
-          // than pass through. The trick is phase-locking Z to X:
-          //   x = cos(th)  → |x| is LARGEST at th = 0, π  (out past the ends)
-          //   z = sin(th)  → |z| is LARGEST at th = π/2, 3π/2 (mid-span)
-          // so the body is at full depth (clear in front / clear behind)
-          // exactly while it crosses the letters' span, and only changes
-          // side when it is out beyond their left/right ends. That reads as
-          // slithering AROUND a solid object. The old z had a +1.1 phase
-          // offset, which put z≈0 mid-span — straight through the glass.
-          // The 2*th harmonic is zero at all four of those key angles, so
-          // it adds asymmetry without weakening the clearance.
+          // ── build the FLIGHT CURVE — a FIGURE-8 around the letters in
+          // screen-XY that dives in front of / climbs behind the text
+          // (Z weave) so it reads as a dragon banking through the air.
+          // Sized so curveLength ≈ 2.2× bodyArc → body fills ~45% of the
+          // loop: head clearly LEADS, tail clearly TRAILS on the same
+          // track. The letters are SOLID, and a figure-8's crossover
+          // sits mid-span — exactly where the glass is — so the shape
+          // only works because Z is phase-locked to the crossover:
+          //   x = cos(th)   → x = 0 (the crossover) at th = π/2, 3π/2
+          //   y = sin(2*th) → the two lobes of the 8 (up-right/down-left)
+          //   z = sin(th)   → |z| is LARGEST at exactly th = π/2, 3π/2
+          // so the body crosses the letters' span at FULL depth — the
+          // first crossing sweeps clear in front of the glass, the
+          // second clear behind it — and only re-approaches z≈0 out
+          // past the letters' left/right ends. An 8 threaded around a
+          // solid object, never through it. The small sin(th) term in Y
+          // tilts one lobe above the other so the 8 reads organic, and
+          // is zero at neither crossover so it's kept small.
           const baseShape = (th) => new THREE.Vector3(
-            Math.cos(th) * 1.35,                                   // wide X orbit
-            0.60 * Math.sin(th) + 0.16 * Math.sin(2*th + 0.5),     // ellipse + teardrop
-            0.95 * Math.sin(th) + 0.12 * Math.sin(2*th)            // depth locked to X
+            Math.cos(th) * 1.35,                                   // wide X sweep
+            0.62 * Math.sin(2*th) + 0.10 * Math.sin(th + 0.4),     // figure-8 lobes
+            0.95 * Math.sin(th) + 0.12 * Math.sin(2*th)            // depth locked to crossover
           );
           const SHN = 260;
           // measure base length
@@ -1933,7 +1934,11 @@
             const p = baseShape((i / SHN) * Math.PI * 2);
             baseLen += p.distanceTo(prev); prev = p;
           }
-          const scaleS = (2.2 * rqBodyArc) / baseLen;
+          // 2.6× body arc (was 2.2×) — praneel wanted a wider standoff
+          // from the letters: the whole orbit "sphere" inflates uniformly
+          // since the shape is normalized to this length. Body now fills
+          // ~38% of the loop instead of ~45%.
+          const scaleS = (2.6 * rqBodyArc) / baseLen;
           const flightPts = [];
           for (let i = 0; i < SHN; i++) {
             flightPts.push(baseShape((i / SHN) * Math.PI * 2).multiplyScalar(scaleS));
