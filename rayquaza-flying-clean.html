@@ -3085,6 +3085,15 @@
     const _gWantUp= new THREE.Vector3();  // desired (transported) up
     const _gCentDir = new THREE.Vector3(); // centripetal direction for banking
     const _gBwdTan  = new THREE.Vector3(); // backward tangent scratch
+    // swim-wave basis: the plane the anguilliform wave bends in, rebuilt
+    // per bone from the local path tangent so the wave is always ACROSS
+    // the body rather than along a fixed world axis (see Pass A)
+    const _rqTan  = new THREE.Vector3();
+    const _rqSide = new THREE.Vector3();
+    const _rqUp2  = new THREE.Vector3();
+    // per-bone BANKED up. Kept separate from _gUp so the bank never
+    // contaminates the parallel-transport frame (see Pass A's roll block)
+    const _rqBankUp = new THREE.Vector3();
     // head-damping: previous-frame head target WORLD quat, so we can rate-limit
     // the head's per-frame rotation and never let it snap ~180° (cooked head).
     const _gHeadPrevWQ = new THREE.Quaternion();
@@ -3948,12 +3957,38 @@
               sampleAt(_rqHeadS - childArc,            _gHP1);
             }
             _gT0.copy(_gHP0); _gT1.copy(_gHP1);
-            // anguilliform swim, amplitude grows head→tail
+            // anguilliform swim, amplitude grows head→tail.
+            //
+            // The offset is applied in a frame built from THIS segment's
+            // own tangent, not along world axes. Applied in world axes it
+            // silently became heading-dependent: wherever the flight path
+            // happened to run along the wave's axis, the "lateral" offset
+            // pushed the sample ALONG the body instead of across it, the
+            // undulation cancelled, and that stretch of body held its
+            // bend — stiff on some legs of the loop, alive on others. In
+            // a tangent-relative frame the wave is across the body
+            // everywhere on the curve.
             const u   = Math.min(1, b.userData.rqCumArc / bodyArc);
-            const env = 0.12 + u * (1.15 + u);
+            // taper toward the tip: out here the wave offset rivals the
+            // segment length it perturbs, so untapered it owns the aim
+            // instead of bending it. (The very last bone is excluded from
+            // the flight override entirely — see Pass B — so the NB-1
+            // rung of this taper only matters if that ever changes.)
+            const tipTaper = i >= NB - 1 ? 0.2 : (i >= NB - 2 ? 0.55 : 1);
+            const env = (0.12 + u * (1.15 + u)) * tipTaper;
             const ph  = UND_FREQ * t - UND_WAVES * Math.PI * 2 * u;
-            _gT1.z += Math.sin(ph) * UND_AMP * env;
-            _gT1.y += Math.cos(ph) * UND_AMP * env * 0.5;
+            _rqTan.copy(_gT1).sub(_gT0);
+            if (_rqTan.lengthSq() > 1e-9) {
+              _rqTan.normalize();
+              // side = tangent × up, degenerate only when the segment
+              // runs straight up/down, where any perpendicular will do
+              _rqSide.crossVectors(_rqTan, _gWorldUp);
+              if (_rqSide.lengthSq() < 1e-6) _rqSide.set(1, 0, 0).cross(_rqTan);
+              _rqSide.normalize();
+              _rqUp2.crossVectors(_rqSide, _rqTan).normalize();
+              _gT1.addScaledVector(_rqSide, Math.sin(ph) * UND_AMP * env);
+              _gT1.addScaledVector(_rqUp2,  Math.cos(ph) * UND_AMP * env * 0.5);
+            }
 
             _gDir.copy(_gT1).sub(_gT0);
             if (_gDir.lengthSq() < 1e-9) { b.userData.rqWQ.copy(b.userData.rqRestWorldQ); continue; }
@@ -3966,7 +4001,20 @@
               if (_gUp.lengthSq() < 1e-4) _gUp.set(1,0,0).addScaledVector(_gDir, -_gDir.x);
             }
             _gUp.normalize();
-            // banking: blend up toward centripetal so it rolls into turns
+            // _gUp is the CLEAN parallel-transported dorsal frame: it is
+            // both what carries to the NEXT bone (not reseeded for i>0 —
+            // that carry IS the transport) and what seeds the next FRAME
+            // via _rqHeadUp. Banking must never be written into it — it
+            // used to be, which compounded two ways and rolled the body
+            // out of its dorsal plane: spatially (each bone inherited
+            // every previous bone's bank plus its own, spiralling down
+            // the chain) and temporally (the head's up was stored
+            // POST-bank and reseeded from itself every frame, so the
+            // lean fed back and saturated at fully-banked).
+            if (i === 0) _rqHeadUp.copy(_gUp);
+            // banking: a per-bone lean toward centripetal so the body
+            // rolls into turns. Applied to a COPY — a lean, not a frame.
+            _rqBankUp.copy(_gUp);
             {
               sampleAt(_rqHeadS - (b.userData.rqCumArc + bodyArc * 0.05), _gBwdTan);
               _gCentDir.subVectors(_gHP0, _gBwdTan).normalize();
@@ -3974,18 +4022,17 @@
               const cLen = _gBwdTan.length();
               if (cLen > 0.02) {
                 _gBwdTan.divideScalar(cLen);
-                _gUp.addScaledVector(_gBwdTan, 0.40);
-                _gUp.addScaledVector(_gDir, -_gUp.dot(_gDir));
-                _gUp.normalize();
+                _rqBankUp.addScaledVector(_gBwdTan, 0.40);
+                _rqBankUp.addScaledVector(_gDir, -_rqBankUp.dot(_gDir));
+                _rqBankUp.normalize();
               }
             }
-            if (i === 0) _rqHeadUp.copy(_gUp);
 
             _gDelta.setFromUnitVectors(b.userData.rqRestFwdWorld, _gDir);
             _gTgtW.copy(_gDelta).multiply(b.userData.rqRestWorldQ);
             _gCurUp.copy(b.userData.rqRestUpWorld).applyQuaternion(_gDelta);
             _gCurUp.addScaledVector(_gDir, -_gCurUp.dot(_gDir));
-            _gWantUp.copy(_gUp).addScaledVector(_gDir, -_gUp.dot(_gDir));
+            _gWantUp.copy(_rqBankUp).addScaledVector(_gDir, -_rqBankUp.dot(_gDir));
             if (_gCurUp.lengthSq() > 1e-6 && _gWantUp.lengthSq() > 1e-6) {
               _gCurUp.normalize(); _gWantUp.normalize();
               _gRoll.setFromUnitVectors(_gCurUp, _gWantUp);
@@ -4009,8 +4056,23 @@
             }
           }
           const bcsSet = rqf.bodyChainSet;
+          // the LAST driven bone (Tail15 — the tail-fin blade rides it)
+          // is deliberately NOT overridden by the flight rig: its path
+          // sample sits at the very end of the curve where the swim-wave
+          // offset rivals the segment length, so path-aiming it either
+          // pinned the fin at a wrong roll (calibration-vs-runtime
+          // parallel-transport twist) or let the wave own its aim and
+          // swing it wildly — both read as the fin "stuck in one
+          // position" while the rest of the body flowed. Skipped here,
+          // it keeps rest-local + the idle travelling wave (which runs
+          // at full amplitude in flight and is normally just overwritten
+          // by this loop) + the tail whip below: the exact recipe that
+          // reads natural in idle, riding a parent chain that follows
+          // the flight path.
+          const rqFinBone = driven[NB - 1];
           for (let i = 0; i < proc.length; i++) {
             const b = proc[i];
+            if (b === rqFinBone) continue;
             if (!b.userData.rqWQ) continue;
             // ease the smoothed world quat toward the fresh target (shortest arc)
             if (b.userData.rqCurWQ.dot(b.userData.rqWQ) < 0) {
