@@ -1,0 +1,9 @@
+{
+  "name": "portfolio-tools",
+  "private": true,
+  "type": "module",
+  "description": "Dev server + video-hero bake rig. See README.md.",
+  "dependencies": {
+    "puppeteer": "^24.0.0"
+  }
+}
