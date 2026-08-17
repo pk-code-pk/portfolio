@@ -1,2 +1,5 @@
 .DS_Store
 .claude/
+tools/node_modules/
+tools/work/
+tools/package-lock.json

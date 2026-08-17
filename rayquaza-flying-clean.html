@@ -352,8 +352,37 @@
       '<span class="st-text"><span class="st-main">harvard cs</span>' +
       '<span class="st-sub">class of 2028</span></span>';
 
+    /* ── offline capture mode (?capture=1) ────────────────────────────
+       Drives this scene from an EXTERNAL clock so tools can photograph
+       it frame by frame into the pre-baked video hero. Nothing here runs
+       on a visitor: one URLSearchParams read, then every branch below is
+       dead. In capture mode the scene is pinned ABOVE ship quality and
+       the adaptive quality governor is disabled outright — the capture
+       box has unlimited time per frame. */
+    const CAP = (() => {
+      const q = new URLSearchParams(location.search);
+      if (q.get('capture') !== '1') return null;
+      return {
+        touch:  q.get('touch') === '1',   // portrait/phone framing
+        dpr:    parseFloat(q.get('dpr') || '2'),
+        flight: q.get('flight') === '1',
+      };
+    })();
+    if (CAP) {
+      window.__capT = 0;
+      // bake ONLY the 3D scene: every DOM overlay (badge, music player,
+      // error console…) stays out of the pixels — on the video hero they
+      // remain live DOM layered above the <video>.
+      const st = document.createElement('style');
+      st.textContent = 'body > *:not(canvas){display:none !important}' +
+                       'body{background:#000}';
+      document.head.appendChild(st);
+    }
+
     /* ── renderer ─────────────────────────────────────────────────── */
-    const TOUCH_DEVICE = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+    const TOUCH_DEVICE = CAP
+      ? CAP.touch
+      : window.matchMedia('(hover: none), (pointer: coarse)').matches;
     // touch: NATIVE devicePixelRatio, uncapped — crispness is visible on
     // EVERY frame (a soft edge reads as soft the whole time you look at
     // it), while this scene's frame RATE is not (nothing moves fast
@@ -374,9 +403,11 @@
     // on the ladder first, and the freeze-frame floor (desktop T5 / touch
     // T6) restores it back to this ship value for the still it leaves
     // behind. Neither is the common case — most visits never touch either.
-    const DPR_CAP = TOUCH_DEVICE
+    // capture: caller-chosen supersample, unclamped — the frame is being
+    // encoded once offline, not held at 60fps on a phone.
+    const DPR_CAP = CAP ? CAP.dpr : (TOUCH_DEVICE
       ? (window.devicePixelRatio || 2)
-      : Math.min((window.devicePixelRatio || 1) * 1.4, 2.8);
+      : Math.min((window.devicePixelRatio || 1) * 1.4, 2.8));
     // antialias:false — EffectComposer renders to its own MSAA render targets;
     // the renderer's native AA applies only to the default framebuffer which
     // the composer never uses. MSAA on composer.renderTarget1/2 handles AA.
@@ -401,7 +432,9 @@
     // letters need.
     //   desktop: 1.0 × DPR(~1.4-2.8 supersampled) = well above 2.0
     //   touch:   0.7 × DPR3 (native, the common phone case) = 2.1
-    renderer.transmissionResolutionScale = TOUCH_DEVICE ? 0.7 : 1.0;
+    // capture always pays full price for the transmission buffer — the
+    // 0.7 trim protects a phone's frame budget; the bake has none.
+    renderer.transmissionResolutionScale = (CAP || !TOUCH_DEVICE) ? 1.0 : 0.7;
     // NOTE: the adaptive quality governor (see the big comment block near
     // the resize handler, below) is allowed to lower this further on a
     // device that can't hold frame budget (desktop T3, touch T4 — the
@@ -1702,6 +1735,17 @@
         // SkinnedMesh's actual rendered bounding box from its geometry
         // and bone matrices, and aim the camera at that center.
         scene.add(model);
+        // NEVER frustum-cull the creature. three.js tests a SkinnedMesh
+        // against the bounding volume baked from its BIND pose, which
+        // knows nothing about where the bones actually end up — and the
+        // flight rig throws the body along a ~25-unit path, far outside
+        // that volume. Parts (tail fins first, they sit furthest from
+        // the origin) then popped in and out as the stale sphere crossed
+        // the frustum edge. Portrait exposed it and landscape didn't
+        // because the narrower horizontal FOV clips much sooner. The
+        // creature is the subject and effectively always on screen, so
+        // skipping the test costs nothing.
+        model.traverse(o => { if (o.isMesh || o.isSkinnedMesh) o.frustumCulled = false; });
         window.__model = model;   // debug handle
         model.updateMatrixWorld(true);
 
@@ -2385,6 +2429,9 @@
             g.userData.baseRotX = g.rotation.x;
             g.userData.baseRotY = g.rotation.y;
             g.userData.baseRotZ = g.rotation.z;
+            // same bind-pose culling trap as rayquaza (see scene.add(model)
+            // above) — the gyarados trail rig moves it just as far.
+            g.traverse(o => { if (o.isMesh || o.isSkinnedMesh) o.frustumCulled = false; });
             greninjaModel = g;
             resolve(g);
           },
@@ -2878,6 +2925,9 @@
     // to step down to), so a maxed-out device pays only a single check
     // per frame for the rest of the visit.
     function qgTick(fdt) {
+      // capture bake: hand-stepped clock makes frame deltas meaningless,
+      // and a step-down would bake degraded quality into the video.
+      if (CAP) return;
       if (qgTier >= QG_MAX_TIER) return;
 
       // don't start sampling until the scene is actually on screen —
@@ -3002,6 +3052,8 @@
     // calibration if sessionStorage is unavailable (private mode) or
     // simply empty (first load this session).
     (function qgRestore() {
+      // capture bake runs at pinned max quality — never inherit a tier.
+      if (CAP) return;
       let stored = null;
       try { stored = sessionStorage.getItem(QG_STORAGE_KEY); } catch (err) {}
       if (stored === null) return;
@@ -3068,6 +3120,38 @@
 
     /* ── animate ──────────────────────────────────────────────────── */
     const clock = new THREE.Clock();
+    if (CAP) {
+      // EXTERNAL CLOCK. All motion derives from clock.getElapsedTime()
+      // (see the 60fps cap comment in tick), so overriding this one
+      // function is the whole capture mechanism: the script sets __capT,
+      // lets the RAF loop paint, screenshots. Extra ticks between steps
+      // see an unchanged t → dt-integrating rigs advance by exactly 0.
+      clock.getElapsedTime = () => window.__capT;
+      window.__capSetFlight = (on) => {
+        rqLooping = !!on;
+        if (on) rqLoopStart = window.__capT;
+        else    rqLoopStop  = window.__capT;
+      };
+      window.__capState = () => ({
+        rqLooping, rqLoopStart, rqLoopStop, t: window.__capT,
+        pokemon: currentPokemon,
+        // head arc-distance + closed-curve length for each rig. A clip loops
+        // seamlessly only when the head advances a whole number of curve
+        // lengths across it, and neither rig travels at constant speed
+        // (rayquaza blends in over 1.5s, gyarados eases through turns), so
+        // the capture tool reads these to pick its window empirically
+        // rather than assuming period x N.
+        rqS: model && model.userData.rqf ? _rqHeadS : null,
+        rqL: model && model.userData.rqf ? model.userData.rqf.curveLen : null,
+        gyaS: greninjaModel ? _gSHead : null,
+        gyaL: greninjaModel ? greninjaModel.userData.gyaCurveLen : null,
+      });
+      // switch to gyarados/underwater world for its clip
+      window.__capSwitchPokemon = () => switchPokemon();
+      window.__camera = camera;
+      window.__capPause = false;
+      window.__capRenderOnce = () => { try { composer.render(); } catch (e) {} };
+    }
     const tmpLookAt = new THREE.Vector3();
 
     // ── preallocated temporaries for the gyarados figure-8 path-follow
@@ -3225,6 +3309,12 @@
     // none, so capture our own clicks/taps directly. When embedded these never
     // fire (events pass through) and the parent forwards coords via postMessage.
     const _selfHeroClick = (cx, cy) => {
+      // capture bake: a stray human click on the capture window must
+      // never reach the raycast — one accidental click once toggled
+      // FLIGHT mid-bake and an entire "idle" clip silently filmed the
+      // flight loop. Flight state during capture is driven ONLY by
+      // __capSetFlight.
+      if (CAP) return;
       window.__heroClick = {
         x:  (cx / window.innerWidth)  * 2 - 1,
         y: -((cy / window.innerHeight) * 2 - 1),
@@ -3242,6 +3332,14 @@
       // frozen scene truly stops costing anything, sustained.
       if (qgFrozen) return;
       requestAnimationFrame(tick);
+      // capture: hold the loop until the tool explicitly releases one frame.
+      // Not just a nicety — several bone smoothers below apply a CONSTANT
+      // factor per tick rather than a dt-scaled one (see the rqBlend slerps
+      // in the flight rig), so their state depends on how many times tick()
+      // ran, not on elapsed clock. Free-running RAF between capture steps
+      // therefore bakes the tool's IPC jitter into the animation and breaks
+      // the loop seam. One released tick per captured frame is the fix.
+      if (CAP && window.__capPause) return;
       now = now || 0;
       // 60fps hard cap, touch only, checked FIRST (before even the
       // pause/throttle gate below) — this is where DPR_CAP's restored
@@ -3293,7 +3391,11 @@
         }
         _qgLastTick = now;
       }
-      if (TOUCH_DEVICE && now - _qgLastRender < _qgFrameMin - _qgTickMin / 2) return;
+      // capture is exempt: the bake has no frame budget to protect, and a
+      // real-time gate would make the released tick land a variable number
+      // of RAF frames later — the same nondeterminism __capPause exists to
+      // remove.
+      if (!CAP && TOUCH_DEVICE && now - _qgLastRender < _qgFrameMin - _qgTickMin / 2) return;
       // frame-gating per mode. NOTE: 'pause' is a TRICKLE (~5fps), not a
       // hard stop — keeps the WebGL shaders warm and the compositor layer
       // promoted, so scrolling BACK to the hero resumes instantly instead
@@ -3515,11 +3617,21 @@
           } else {
             const px = _gHistPos[_gHistHead*3], py = _gHistPos[_gHistHead*3+1], pz = _gHistPos[_gHistHead*3+2];
             const step = Math.hypot(headWX-px, headWY-py, headWZ-pz);
-            _gHeadTravel += step;
-            _gHistHead = (_gHistHead + 1) % _GHIST_N;
-            _gHistPos[_gHistHead*3] = headWX; _gHistPos[_gHistHead*3+1] = headWY; _gHistPos[_gHistHead*3+2] = headWZ;
-            _gHistArc[_gHistHead] = _gHeadTravel;
-            if (_gHistCount < _GHIST_N) _gHistCount++;
+            // record ONLY when the head actually moved. A zero-movement
+            // tick (paused clock, capture-mode replay ticks, throttle)
+            // used to push a DUPLICATE entry, and duplicates evict real
+            // history from the fixed-size ring — the deepest-history
+            // consumers (the last tail bones) then ran past the oldest
+            // sample and clamped, visibly detaching the tail from the
+            // body's track. Live 60fps playback always moves, so this
+            // guard changes nothing for visitors.
+            if (step > 1e-6) {
+              _gHeadTravel += step;
+              _gHistHead = (_gHistHead + 1) % _GHIST_N;
+              _gHistPos[_gHistHead*3] = headWX; _gHistPos[_gHistHead*3+1] = headWY; _gHistPos[_gHistHead*3+2] = headWZ;
+              _gHistArc[_gHistHead] = _gHeadTravel;
+              if (_gHistCount < _GHIST_N) _gHistCount++;
+            }
           }
 
           // trailAt(d, out): world point that is travelled-arc-distance `d`

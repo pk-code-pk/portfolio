@@ -37,6 +37,14 @@
                            border:0; display:block; opacity:0;
                            transition:opacity .55s ease; }
     .hero-3d.is-live .hero-frame { opacity:1; }
+    /* video hero layers: A/B stack for crossfades; object-fit keeps the
+       bake covering any viewport. mode-video/mode-live picks which hero
+       exists — the OTHER is display:none so it costs nothing. */
+    .hero-vid { object-fit:cover; background:#000; pointer-events:none;
+                opacity:0 !important; transition:opacity .5s ease; }
+    .hero-3d.is-live .hero-vid.on { opacity:1 !important; }
+    .hero-3d.mode-video iframe.hero-frame { display:none; }
+    .hero-3d.mode-live  .hero-vid         { display:none; }
     nav { position:fixed; top:0; left:0; right:0; height:var(--nav-h); z-index:100; }
   </style>
 
@@ -364,8 +372,9 @@
     }
     #music-toggle:hover { color: #fff; transform: scale(1.08); }
     #music-toggle svg { width: 18px; height: 18px; display: block; }
-    /* pokemon switch — swaps the 3D hero creature (rayquaza ↔ gyarados) */
-    #poke-switch {
+    /* pokemon switch — swaps the 3D hero creature (rayquaza ↔ gyarados)
+       (#live-toggle shares the exact same look) */
+    #poke-switch, #live-toggle {
       background: none; border: none; padding: 4px 8px;
       color: rgba(255,255,255,0.8); cursor: pointer;
       display: flex; align-items: center; gap: 7px;
@@ -373,8 +382,14 @@
       letter-spacing: .14em; text-transform: lowercase; white-space: nowrap;
       transition: color .25s, transform .2s;
     }
-    #poke-switch:hover { color: #fff; transform: scale(1.06); }
-    #poke-switch svg { width: 15px; height: 15px; display: block; }
+    #poke-switch:hover, #live-toggle:hover { color: #fff; transform: scale(1.06); }
+    #poke-switch svg, #live-toggle svg { width: 15px; height: 15px; display: block; }
+    /* narrow phones: the bar can't fit two labeled buttons — drop the
+       text labels, keep the icons */
+    @media (max-width: 480px) {
+      #poke-switch .poke-name, #live-toggle .poke-name { display: none; }
+      #poke-switch, #live-toggle { padding: 4px 5px; }
+    }
     /* invisible counterweight = play button (18px svg + 4px×2 padding) so
        the slider track sits on the exact viewport-center axis */
     .np-balance { width: 26px; flex: 0 0 26px; }
@@ -1816,9 +1831,15 @@
      all refinements happen in that file and flow here on reload.
      To revert: comment out this section and uncomment the OLD HERO below. -->
 <section class="hero hero-3d">
+  <!-- VIDEO HERO (default): pre-baked loops of the same scene — zero
+       WebGL, hardware decode, no heat. The iframe below is the LIVE
+       opt-in: src intentionally absent (data-src) so no GL boots unless
+       the visitor asks; the toggle in the music bar swaps modes. -->
+  <video id="hero-vid-a" class="hero-frame hero-vid" muted loop playsinline autoplay preload="auto"></video>
+  <video id="hero-vid-b" class="hero-frame hero-vid" muted loop playsinline preload="none"></video>
   <iframe
     id="hero-frame"
-    src="rayquaza-flying-clean.html?v=70"
+    data-src="rayquaza-flying-clean.html?v=70"
     class="hero-frame"
     title="praneel · 3d hero"
     allow="autoplay; fullscreen"
@@ -1855,6 +1876,12 @@
   <button id="poke-switch" aria-label="Switch pokemon" title="Switch pokemon">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
     <span class="poke-name" id="poke-switch-name">gyarados</span>
+  </button>
+  <!-- live-3d toggle: boots the real WebGL scene on demand; default hero
+       is the pre-baked video (no GL, no heat) -->
+  <button id="live-toggle" aria-label="Toggle live 3D" title="Toggle live 3D">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>
+    <span class="poke-name" id="live-toggle-name">live 3d</span>
   </button>
 </div>
 
@@ -2889,10 +2916,20 @@
   const USE_TERMINAL_HOVER = true;
   const IS_TOUCH = window.matchMedia('(hover: none), (pointer: coarse)').matches;
 
-  // DESKTOP ONLY. The touch version (scroll-driven focus + a second WebGL
-  // context on top of the hero) was measurably laggy on phones — the whole
-  // feature is now skipped there: no ogl fetch, no canvas, no scroll work.
-  if (USE_TERMINAL_HOVER && !IS_TOUCH) {
+  // Touch was previously skipped entirely: the scroll-driven focus plus a
+  // second WebGL context ON TOP OF THE LIVE HERO measured laggy on phones.
+  // The hero is now a pre-baked <video> (hardware decode, no GL context),
+  // so this canvas no longer competes with a second renderer for the GPU —
+  // the original reason for the cut is gone. Touch is re-enabled, but pays
+  // less: half DPR and a 30fps render cap (see IS_TOUCH below), and only
+  // ever ONE row's canvas exists at a time.
+  //
+  // The .is-focus CSS (wipe-in + text inversion) had been left orphaned by
+  // that cut — no code added the class — so phones showed no highlight at
+  // all, while a tap still fired a synthetic mouseenter that rendered the
+  // terminal inside a fully-clipped overlay: invisible shader, real GPU
+  // cost. The scroll-focus driver below restores the intended behaviour.
+  if (USE_TERMINAL_HOVER) {
     const { Renderer, Program, Mesh, Color, Triangle } =
       await import('./vendor/ogl.bundle.min.js');
 
@@ -3056,11 +3093,19 @@
     let raf = 0;
     const t0 = performance.now() - Math.random() * 50000;
 
+    // touch renders at 30fps: this is a slow, noisy CRT effect where the
+    // frame RATE is not what reads (unlike the hero, whose crispness is
+    // visible every frame) — halving it halves the shader cost while
+    // scrolling, which is exactly when a phone is busiest.
+    const TERM_FRAME_MIN = IS_TOUCH ? 1000 / 30 : 0;
+    let lastDraw = 0;
     function tick(t) {
       if (!currentItem) { raf = 0; return; }
+      raf = requestAnimationFrame(tick);
+      if (TERM_FRAME_MIN && t - lastDraw < TERM_FRAME_MIN) return;
+      lastDraw = t;
       program.uniforms.iTime.value = (t - t0) * 0.001 * currentSpeed;
       renderer.render({ scene: mesh });
-      raf = requestAnimationFrame(tick);
     }
 
     function resizeToCurrent() {
@@ -3118,7 +3163,16 @@
       program.uniforms.uBrightness.value        = p.bright;
       currentSpeed                              = p.speed;
 
+      // PAINT ONE FRAME NOW, synchronously, before this event handler
+      // returns. The overlay's flat --accent background starts wiping in
+      // the instant :hover matches, but the canvas used to stay blank
+      // until the next rAF — and resizeToCurrent()'s setSize() clears it
+      // — so every hover flashed raw accent colour first and only then
+      // became the terminal. Rendering here means the browser's very
+      // first paint of the wipe already contains the effect.
       resizeToCurrent();
+      program.uniforms.iTime.value = (performance.now() - t0) * 0.001 * currentSpeed;
+      renderer.render({ scene: mesh });
       if (!raf) raf = requestAnimationFrame(tick);
     }
 
@@ -3128,15 +3182,202 @@
 
     const items = document.querySelectorAll('.work-item[data-slug]');
 
-    // hover drives the terminal activation (this whole block is desktop-only
-    // now — the touch scroll-focus variant was removed for performance)
-    items.forEach(item => {
-      item.addEventListener('mouseenter', () => activate(item));
-      item.addEventListener('mouseleave', () => deactivate(item));
-    });
+    const TOUCH = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+
+    if (!TOUCH) {
+      // pointer devices: hover drives the terminal
+      items.forEach(item => {
+        item.addEventListener('mouseenter', () => activate(item));
+        item.addEventListener('mouseleave', () => deactivate(item));
+      });
+    } else {
+      /* ── TOUCH: scroll-focus drives it ───────────────────────────────
+         The .is-focus styles have always existed (wipe-in + text
+         inversion, mirroring hover) but nothing added the class — the
+         driver was dropped and the CSS left orphaned, so phones got no
+         highlight at all. Worse, a tap still fired a synthetic
+         mouseenter, so the terminal rendered *inside a fully-clipped
+         overlay*: invisible shader burning GPU until another row took
+         over. Both are fixed here: hover listeners are not bound on
+         touch at all, and the row nearest viewport centre gets
+         .is-focus + the terminal.
+
+         Perf: exactly ONE row is ever active (activate() reparents the
+         single shared canvas), and the rAF loop is stopped outright
+         whenever no row qualifies — scrolling past the section costs
+         nothing. */
+      let focused = null;
+      const setFocus = (item) => {
+        if (item === focused) return;
+        if (focused) { focused.classList.remove('is-focus'); deactivate(focused); }
+        focused = item;
+        if (item) { item.classList.add('is-focus'); activate(item); }
+      };
+      // ratio bookkeeping per row; the row with the greatest visibility
+      // whose centre band overlaps the viewport middle wins
+      const vis = new Map();
+      const pick = () => {
+        const mid = window.innerHeight / 2;
+        let best = null, bestDist = Infinity;
+        for (const [item, ratio] of vis) {
+          if (ratio <= 0) continue;
+          const r = item.getBoundingClientRect();
+          const d = Math.abs((r.top + r.bottom) / 2 - mid);
+          // only rows genuinely crossing the middle third qualify, so
+          // the highlight doesn't crawl row-to-row on every pixel
+          if (r.top > mid + r.height || r.bottom < mid - r.height) continue;
+          if (d < bestDist) { bestDist = d; best = item; }
+        }
+        setFocus(best);
+      };
+      const io = new IntersectionObserver((entries) => {
+        for (const e of entries) vis.set(e.target, e.intersectionRatio);
+        pick();
+      }, { threshold: [0, 0.25, 0.5, 0.75, 1] });
+      items.forEach(item => { vis.set(item, 0); io.observe(item); });
+      window.addEventListener('scroll', pick, { passive: true });
+    }
 
     window.addEventListener('resize', resizeToCurrent);
   }
+
+  /* ─── VIDEO HERO controller ─────────────────────────────────────────
+     Default hero = pre-baked video loops of the WebGL scene (hardware
+     decode, zero GL, no heat). Three clips per orientation — idle,
+     flight, gya(rados) — with in-clip crossfade tails so <video loop>
+     wraps seamlessly. A/B layer stack crossfades between clips. The
+     iframe boots ONLY via the live-3d toggle.
+
+     Hooks exposed for the existing IIFEs below (all only set while in
+     video mode, so those blocks fall through to their iframe paths in
+     live mode):
+       __heroVideoAction(action)  pause/throttle/resume  ← IntersectionObserver
+       __heroVideoSwitch()        rayquaza ⇄ gyarados    ← #poke-switch
+       __heroVideoClick()         no-op, video-mode flag ← hero click forward
+       __heroVideoAmp(amp)        music pulse            ← audio engine */
+  (function () {
+    const heroEl = document.querySelector('.hero-3d');
+    const A = document.getElementById('hero-vid-a');
+    const B = document.getElementById('hero-vid-b');
+    const iframe = document.getElementById('hero-frame');
+    const liveBtn = document.getElementById('live-toggle');
+    const liveName = document.getElementById('live-toggle-name');
+    if (!heroEl || !A || !B) return;
+    heroEl.classList.add('mode-video');
+
+    // ── rendition pick: best codec this browser hardware-decodes, and
+    //    the orientation matching the viewport (portrait bake reuses the
+    //    phone framing of the live scene)
+    const probe = document.createElement('video');
+    const EXT =
+      probe.canPlayType('video/mp4; codecs="hvc1.2.4.L120.b0"')  ? '.hevc.mp4' :
+      probe.canPlayType('video/webm; codecs="vp09.00.41.10"')    ? '.webm' :
+      '.mp4';
+    const ORIENT = innerHeight > innerWidth ? 'port' : 'land';
+    const src = (clip) => `hero-video/${clip}-${ORIENT}${EXT}`;
+
+    let front = A, back = B;      // front = visible layer
+    // both orientations open ON the figure-8 flight loop — praneel cut the
+    // idle clip entirely, so flight IS the hero everywhere. Nothing to
+    // toggle to on click; the poke-switch is the only clip control left.
+    let clip = 'flight';          // flight | gya
+    let set  = 'rayquaza';        // rayquaza | gyarados
+    let paused = false;
+
+    // first paint; signals the SAME __heroReady handshake the iframe
+    // used, so the preloader + .is-live fade need zero changes.
+    front.src = src(clip);
+    front.addEventListener('canplay', function once() {
+      front.removeEventListener('canplay', once);
+      front.classList.add('on');
+      front.play().catch(() => {});
+      window.postMessage({ __heroReady: true }, '*');
+      // background-prefetch the other clips once the boot loop is up
+      const idle = window.requestIdleCallback || ((f) => setTimeout(f, 2500));
+      idle(() => {
+        // no idle clip ships in either orientation
+        for (const c of ['flight', 'gya']) if (c !== clip) fetch(src(c)).catch(() => {});
+      });
+    });
+
+    function show(next) {
+      if (clip === next) return;
+      clip = next;
+      back.src = src(next);
+      const b = back;
+      b.addEventListener('canplay', function once() {
+        b.removeEventListener('canplay', once);
+        if (clip !== next) return;           // superseded mid-load
+        b.play().catch(() => {});
+        b.classList.add('on');
+        front.classList.remove('on');
+        const old = front; front = b; back = old;
+        setTimeout(() => { if (back === old) { old.pause(); old.removeAttribute('src'); old.load(); } }, 600);
+      });
+      b.load();
+    }
+
+    function installHooks() {
+      window.__heroVideoAction = (action) => {
+        paused = action === 'pause';
+        if (paused) front.pause();
+        else front.play().catch(() => {});
+        // 'throttle' needs nothing: video decode is off-main-thread
+      };
+      window.__heroVideoSwitch = () => {
+        set = set === 'rayquaza' ? 'gyarados' : 'rayquaza';
+        // rayquaza's clip is flight in both orientations — there is no
+        // idle bake to return to, and asking for one 404s silently:
+        // show() waits on canplay, which a missing file never fires
+        show(set === 'gyarados' ? 'gya' : 'flight');
+      };
+      // Nothing to toggle (no idle bake), but it MUST stay defined:
+      // forward() below tests for this hook to detect video mode and stop
+      // before the live-scene raycast path. It doubles as the play-kick —
+      // iOS blocks even muted autoplay in Low Power Mode and paints its
+      // native play glyph, which is untappable here (.hero-vid is
+      // pointer-events:none), so the tap lands in forward() instead.
+      // Running inside the gesture handler is what makes play() allowed.
+      window.__heroVideoClick = () => {
+        if (!paused && front.paused) front.play().catch(() => {});
+      };
+      window.__heroVideoAmp = (amp) => {
+        // compositor-only pulse standing in for the baked scene's uPulse
+        front.style.filter = amp > 0.01 ? `brightness(${(1 + amp * 0.22).toFixed(3)})` : '';
+      };
+    }
+    installHooks();
+
+    // any first gesture anywhere retries a blocked autoplay (iOS Low Power
+    // Mode). Kept permanently — it's two cheap listeners and also recovers
+    // playback if iOS ever pauses the tab's media in the background.
+    // mode-video guard: in live mode the video is parked on purpose.
+    const kick = () => {
+      if (heroEl.classList.contains('mode-video') && !paused && front.paused)
+        front.play().catch(() => {});
+    };
+    document.addEventListener('touchend', kick, { passive: true });
+    document.addEventListener('click', kick, true);
+
+    // ── live-3d opt-in: boot the real scene, park the videos ──────────
+    function setMode(live) {
+      if (live) {
+        if (iframe && !iframe.src) iframe.src = iframe.dataset.src;
+        heroEl.classList.remove('mode-video'); heroEl.classList.add('mode-live');
+        front.pause();
+        delete window.__heroVideoAction; delete window.__heroVideoSwitch;
+        delete window.__heroVideoClick;  delete window.__heroVideoAmp;
+        if (liveName) liveName.textContent = 'video';
+      } else {
+        heroEl.classList.remove('mode-live'); heroEl.classList.add('mode-video');
+        if (iframe && iframe.contentWindow) iframe.contentWindow.postMessage({ __heroAction: 'pause' }, '*');
+        if (!paused) front.play().catch(() => {});
+        installHooks();
+        if (liveName) liveName.textContent = 'live 3d';
+      }
+    }
+    if (liveBtn) liveBtn.addEventListener('click', () => setMode(heroEl.classList.contains('mode-video')));
+  })();
 
   /* ─── (#1) pause the 3D hero iframe when scrolled off-screen ───────
      IntersectionObserver watches .hero-3d. When the section leaves the
@@ -3164,6 +3405,8 @@
       else                       action = 'resume';    // idle + visible → full fps
       if (action === lastSent) return;
       lastSent = action;
+      // video mode: pause/resume the <video> instead of the iframe scene
+      if (window.__heroVideoAction) { window.__heroVideoAction(action); return; }
       if (frame.contentWindow) frame.contentWindow.postMessage({ __heroAction: action }, '*');
     }
 
@@ -3197,7 +3440,9 @@
     const other = () => current === 'rayquaza' ? 'gyarados' : 'rayquaza';
     if (nameEl) nameEl.textContent = other(); // label shows what you'll switch TO
     btn.addEventListener('click', () => {
-      if (frame.contentWindow) frame.contentWindow.postMessage({ __heroAction: 'switchPokemon' }, '*');
+      // video mode: crossfade to the other creature's baked clip
+      if (window.__heroVideoSwitch) window.__heroVideoSwitch();
+      else if (frame.contentWindow) frame.contentWindow.postMessage({ __heroAction: 'switchPokemon' }, '*');
       current = other();
       if (nameEl) nameEl.textContent = other();
     });
@@ -3216,6 +3461,18 @@
       // don't hijack clicks on real controls sitting over the hero
       if (target && target.closest &&
           target.closest('button, a, input, select, label, #music-player')) return;
+      // video mode: swallow the hero tap. The hook is a no-op now (no idle
+      // bake to toggle to) but its presence is the video-mode test, and
+      // the return matters — checked BEFORE the iframe rect below, since
+      // the iframe is display:none here and its zero-size rect would
+      // otherwise swallow every click.
+      if (window.__heroVideoClick) {
+        const hero = document.querySelector('.hero-3d');
+        const hr = hero ? hero.getBoundingClientRect() : null;
+        if (hr && clientX >= hr.left && clientX <= hr.right &&
+            clientY >= hr.top && clientY <= hr.bottom) window.__heroVideoClick();
+        return;
+      }
       const r = frame.getBoundingClientRect();
       if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) return;
       const coords = {
@@ -3423,6 +3680,7 @@
           waveCleared = true;
           if (waveCtx) waveCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
           if (frame && frame.contentWindow) { try { frame.contentWindow.__heroAmp = 0; } catch (e) {} }
+          if (window.__heroVideoAmp) window.__heroVideoAmp(0);
         }
         return;
       }
@@ -3444,6 +3702,7 @@
       if (frame && frame.contentWindow) {
         try { frame.contentWindow.__heroAmp = amp; } catch (e) {}
       }
+      if (window.__heroVideoAmp) window.__heroVideoAmp(amp);
       drawWave();
     }
     requestAnimationFrame(pumpAmp);
