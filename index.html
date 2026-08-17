@@ -31,8 +31,8 @@
                    letter-spacing:.06em; color:rgba(255,255,255,.18); }
     .hero.hero-3d { position:relative; width:100%; height:100svh; min-height:100svh;
                overflow:hidden;
-               background:#000 url('hero-poster.webp') center center / cover no-repeat; }
-    @media (max-width:640px){ .hero.hero-3d { background-image:url('hero-poster-mobile.webp'); } }
+               background:#000 url('hero-poster.webp?v=2') center center / cover no-repeat; }
+    @media (max-width:640px){ .hero.hero-3d { background-image:url('hero-poster-mobile.webp?v=2'); } }
     .hero-3d .hero-frame { position:absolute; inset:0; width:100%; height:100%;
                            border:0; display:block; opacity:0;
                            transition:opacity .55s ease; }
@@ -95,8 +95,8 @@
        long before the 700KB three.js bundle + 480KB model can arrive, so the
        hero LOOKS right immediately on slow connections (and stays right if
        WebGL never initialises at all). -->
-  <link rel="preload" as="image" href="hero-poster.webp" media="(min-width: 641px)">
-  <link rel="preload" as="image" href="hero-poster-mobile.webp" media="(max-width: 640px)">
+  <link rel="preload" as="image" href="hero-poster.webp?v=2" media="(min-width: 641px)">
+  <link rel="preload" as="image" href="hero-poster-mobile.webp?v=2" media="(max-width: 640px)">
 
   <style>
     @property --glow-col {
@@ -322,10 +322,10 @@
       height: 100svh;
       min-height: 100svh;
       overflow: hidden;
-      background: #000 url('hero-poster.webp') center center / cover no-repeat;
+      background: #000 url('hero-poster.webp?v=2') center center / cover no-repeat;
     }
     @media (max-width: 640px) {
-      .hero.hero-3d { background-image: url('hero-poster-mobile.webp'); }
+      .hero.hero-3d { background-image: url('hero-poster-mobile.webp?v=2'); }
     }
     /* the live scene crossfades over the poster once it signals ready */
     .hero-3d .hero-frame { opacity: 0; transition: opacity .55s ease; }
@@ -1918,7 +1918,7 @@
 <!-- ── work ── -->
 <section class="work" id="work">
   <div class="work-head">
-    <span class="section-label">Internships</span>
+    <span class="section-label">Work</span>
     <span class="section-label">(3)</span>
   </div>
 
@@ -1930,8 +1930,8 @@
       <span class="work-name">janet.ai</span>
       <div class="work-meta">
         <span class="work-type" data-type="internship">[ internship ]</span>
-        <span class="work-year">2025</span>
-        <span class="work-cats">ui design · dev</span>
+        <span class="work-year">2026</span>
+        <span class="work-cats">agent platform · infra</span>
       </div>
     </div>
 
@@ -1940,7 +1940,7 @@
       <span class="work-num">02</span>
       <span class="work-name">the learning company</span>
       <div class="work-meta">
-        <span class="work-type" data-type="internship">[ internship ]</span>
+        <span class="work-type" data-type="founder">[ founder ]</span>
         <span class="work-year">2025</span>
         <span class="work-cats">ai · full-stack</span>
       </div>
@@ -2409,34 +2409,40 @@
   const WORKS = {
     'janet-ai': {
       title: 'janet.ai',
-      year: '2025',
+      year: '2026',
       type: 'internship',
       accent: '#7C3AED',
-      lede: 'AI startup building agentic tooling for knowledge workers. I worked across the marketing site and product surface, designing flows, shipping UI in Next.js, and tightening the visual system as the product evolved.',
-      body: [],
+      lede: 'YC startup building AI employees. I led JanetClaw, the flagship. Took an agent living on Mac minis in the office and turned it into a cloud product you can buy.',
+      body: [
+        "Janet is a YC startup building persistent AI employees. Agents that live in your company's Slack, read your email, run your calendar, own real responsibilities. When I joined, the product was an agent running on Mac minis in the office. It worked. It could not be sold: no way for a stranger to sign up, no way to charge them, no way to run two customers without one reaching the other's data. Ten weeks later it was a cloud-hosted fleet strangers could sign up for and pay for, and I led that transformation.",
+        "The spine is a resumable Kubernetes provisioning state machine: sign up, put in a card, and the system births your agent. Stripe subscription billing, encrypted customer-supplied model keys, per-org token metering, health probing, and full teardown that doesn't leak a thing. The core of it shipped in one pull request: +8,552 lines across 50 files. Everything after was built on top.",
+        "Then I gave the agents channels. An iMessage channel built from nothing. I wrote a bare webhook capture server first to learn the real payload shape before writing product code, then HMAC verification, replay windows, dedupe, thread sub-sessions, media to agent vision. Slack the same: event webhooks plus an interactivity endpoint so buttons actually have a path home. Your agent texts you, and you text back.",
+        "Making that trustworthy was its own build. I wrote the security layer that decides whether an agent may read its owner's inbox: a two-layer gate enforced in code, not just prompts, so a jailbroken agent still can't exfiltrate. Plus a prompt-injection defense with shell-command unwrapping and per-run taint tracking. 474 tests on that gate alone.",
+        "Last came infrastructure for custom workflows: customers fire their own automations from a ticket, with ticket context injected, running on their own model account, dual-permission checks before any context leaves the platform. Then I proved the whole thing worked. Live signup rehearsals under throwaway identities, pass bar of zero manual database touches. First run failed and surfaced a real P0. Third run passed 16 of 18. JanetClaw went to production on July 20 on runbooks I wrote. 1,047 commits, 252,000 lines, ten weeks."
+      ],
       // drop image paths here (strings or { src, alt, caption } objects)
       // e.g. 'images/janet-1.png' or { src: 'images/janet-1.png', caption: 'home' }
       images: [],
-      tags: ['Next.js', 'TypeScript', 'React', 'Tailwind', 'Framer Motion'],
+      tags: ['Python', 'FastAPI', 'TypeScript', 'Kubernetes', 'Postgres', 'Stripe', 'Temporal', 'Composio'],
       meta: {
-        role: 'UI Design · Development',
-        timeline: 'Summer 2025',
-        team: 'Founding eng + design',
-        stack: 'Next.js · TS · Tailwind'
+        role: 'Led JanetClaw · flagship product',
+        timeline: 'June to Aug 2026',
+        team: 'Janet AI (YC) · 4 eng',
+        scale: '1,047 commits · 557 PRs'
       },
-      corner: 'JNT · 25'
+      corner: 'JNT · 26'
     },
 
     'tlc': {
       title: 'the learning company',
       year: '2025',
-      type: 'internship',
+      type: 'founder',
       accent: '#16803C',
-      lede: 'Solo-built an adaptive SAT platform. Sold for $10k. Stayed on as the engineering intern.',
+      lede: 'Solo-built an adaptive SAT platform. Sold for $10k.',
       body: [
         "A tutoring company founder wanted an adaptive SAT platform. I put together a team. They bailed. I built the whole thing myself.",
         "The core is a custom IRT (Item Response Theory) scoring engine that adjusts question difficulty to each user. I read papers on IRT and chess rating before picking it over ML, which overfits at small user counts. Next.js and TypeScript on the front. FastAPI on Postgres through Supabase on the back, with Clerk auth and PostHog and Sentry for observability. A RAG pipeline parses raw inputs into JSON schemas and validates 3,000+ SAT questions. Live with 500+ concurrent testers at sub-100ms latency.",
-        "Sold it for $10k. Stayed on as the engineering intern owning the production MVP release, CI/CD, API standards, and 150+ code reviews. The client didn't know my team had bailed until after I delivered."
+        "Sold it for $10k. I still own production: the MVP release, CI/CD, API standards, and 150+ code reviews. The client didn't know my team had bailed until after I delivered."
       ],
       images: [
         { src: 'TLCimgs/practice.webp',        layout: 'hero',   alt: 'adaptive practice question with AI tutor sidebar', caption: 'adaptive practice · with AI tutor' },
@@ -2446,7 +2452,7 @@
       ],
       tags: ['Next.js', 'TypeScript', 'Tailwind', 'FastAPI', 'Python', 'Postgres', 'Supabase', 'SQLAlchemy', 'Clerk', 'PostHog', 'Sentry'],
       meta: {
-        role: 'Software engineering intern',
+        role: 'Founder',
         timeline: 'Nov 2025 to present',
         location: 'Atlanta, GA',
         outcome: 'Sold for $10k'
