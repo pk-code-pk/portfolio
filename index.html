@@ -373,8 +373,8 @@
     #music-toggle:hover { color: #fff; transform: scale(1.08); }
     #music-toggle svg { width: 18px; height: 18px; display: block; }
     /* pokemon switch — swaps the 3D hero creature (rayquaza ↔ gyarados)
-       (#live-toggle shares the exact same look) */
-    #poke-switch, #live-toggle {
+       (#live-toggle and #track-switch share the exact same look) */
+    #poke-switch, #live-toggle, #track-switch {
       background: none; border: none; padding: 4px 8px;
       color: rgba(255,255,255,0.8); cursor: pointer;
       display: flex; align-items: center; gap: 7px;
@@ -382,13 +382,17 @@
       letter-spacing: .14em; text-transform: lowercase; white-space: nowrap;
       transition: color .25s, transform .2s;
     }
-    #poke-switch:hover, #live-toggle:hover { color: #fff; transform: scale(1.06); }
-    #poke-switch svg, #live-toggle svg { width: 15px; height: 15px; display: block; }
-    /* narrow phones: the bar can't fit two labeled buttons — drop the
+    #poke-switch:hover, #live-toggle:hover, #track-switch:hover { color: #fff; transform: scale(1.06); }
+    #poke-switch svg, #live-toggle svg, #track-switch svg { width: 15px; height: 15px; display: block; }
+    /* only shown once a second track exists — see TRACKS in the audio
+       engine script; toggled via inline style, not a class, so there's
+       no flash-of-visible-button before JS decides */
+    #track-switch { display: none; }
+    /* narrow phones: the bar can't fit several labeled buttons — drop the
        text labels, keep the icons */
     @media (max-width: 480px) {
-      #poke-switch .poke-name, #live-toggle .poke-name { display: none; }
-      #poke-switch, #live-toggle { padding: 4px 5px; }
+      #poke-switch .poke-name, #live-toggle .poke-name, #track-switch .poke-name { display: none; }
+      #poke-switch, #live-toggle, #track-switch { padding: 4px 5px; }
     }
     /* invisible counterweight = play button (18px svg + 4px×2 padding) so
        the slider track sits on the exact viewport-center axis */
@@ -1490,6 +1494,30 @@
       text-shadow: 0 0 8px var(--case-accent-glow, rgba(0, 140, 255, 0.5));
     }
 
+    /* ─── case-glitch transition ─── */
+    /* clicking a work row: that row's own terminal-glitch shader (the same
+       one that plays on hover, same per-row personality + accent tint)
+       expands from the row's exact rect to fill the viewport via an
+       animated clip-path, then drains away to reveal the case page loaded
+       underneath. deep-link opens (#case/slug on page load) have no row to
+       expand from and fall back to the title-burst below. */
+    .case-glitch-transition {
+      position: fixed;
+      inset: 0;
+      z-index: 9600;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+    }
+    .case-glitch-transition.is-active { visibility: visible; }
+    .case-glitch-transition canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
     /* ─── title burst (page transition) ─── */
     /* the clicked row's title fills the screen in the site's own typography,
        holds for a beat, then bursts (scale + blur + fade) as the case page
@@ -1872,6 +1900,12 @@
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 4V5L7 9H3zm10.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>
     </div>
   </div>
+  <!-- track switch: cycles the background track — see TRACKS in the audio
+       engine script. hidden by default, shown only once TRACKS.length > 1 -->
+  <button id="track-switch" aria-label="Next track" title="Next track">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4l10 8-10 8V4z"/><path d="M19 5v14"/></svg>
+    <span class="poke-name" id="track-switch-name"></span>
+  </button>
   <!-- pokemon switch: swaps the 3D hero creature in the iframe -->
   <button id="poke-switch" aria-label="Switch pokemon" title="Switch pokemon">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -2043,7 +2077,10 @@
   </div>
 </footer>
 
-<!-- ── title burst transition ── -->
+<!-- ── case-glitch transition (row-click entry) ── -->
+<div class="case-glitch-transition" id="case-glitch-transition" aria-hidden="true"></div>
+
+<!-- ── title burst transition (fallback: deep-link open, no source row) ── -->
 <div class="title-burst" id="title-burst" aria-hidden="true">
   <pre class="title-burst-ascii" id="title-burst-ascii" aria-hidden="true"></pre>
   <span class="title-burst-eyebrow" id="title-burst-eyebrow"></span>
@@ -2415,14 +2452,18 @@
       lede: 'YC startup building AI employees. I led JanetClaw, the flagship. Took an agent living on Mac minis in the office and turned it into a cloud product you can buy.',
       body: [
         "Janet is a YC startup building persistent AI employees. Agents that live in your company's Slack, read your email, run your calendar, own real responsibilities. When I joined, the product was an agent running on Mac minis in the office. It worked. It could not be sold: no way for a stranger to sign up, no way to charge them, no way to run two customers without one reaching the other's data. Ten weeks later it was a cloud-hosted fleet strangers could sign up for and pay for, and I led that transformation.",
-        "The spine is a resumable Kubernetes provisioning state machine: sign up, put in a card, and the system births your agent. Stripe subscription billing, encrypted customer-supplied model keys, per-org token metering, health probing, and full teardown that doesn't leak a thing. The core of it shipped in one pull request: +8,552 lines across 50 files. Everything after was built on top.",
+        "The spine is a resumable Kubernetes provisioning state machine: sign up, put in a card, and the system births your agent. Stripe subscription billing, encrypted customer-supplied model keys, per-org token metering, health probing, and full teardown that doesn't leak a thing.",
         "Then I gave the agents channels. An iMessage channel built from nothing. I wrote a bare webhook capture server first to learn the real payload shape before writing product code, then HMAC verification, replay windows, dedupe, thread sub-sessions, media to agent vision. Slack the same: event webhooks plus an interactivity endpoint so buttons actually have a path home. Your agent texts you, and you text back.",
-        "Making that trustworthy was its own build. I wrote the security layer that decides whether an agent may read its owner's inbox: a two-layer gate enforced in code, not just prompts, so a jailbroken agent still can't exfiltrate. Plus a prompt-injection defense with shell-command unwrapping and per-run taint tracking. 474 tests on that gate alone.",
-        "Last came infrastructure for custom workflows: customers fire their own automations from a ticket, with ticket context injected, running on their own model account, dual-permission checks before any context leaves the platform. Then I proved the whole thing worked. Live signup rehearsals under throwaway identities, pass bar of zero manual database touches. First run failed and surfaced a real P0. Third run passed 16 of 18. JanetClaw went to production on July 20 on runbooks I wrote. 1,047 commits, 252,000 lines, ten weeks."
+        "Making that trustworthy was its own build. I wrote the security layer that decides whether an agent may read its owner's inbox: a two-layer gate enforced in code, not just prompts, so a jailbroken agent still can't exfiltrate. Plus a prompt-injection defense with shell-command unwrapping and per-run taint tracking.",
+        "Last came infrastructure for custom workflows: customers fire their own automations from a ticket, with ticket context injected, running on their own model account, dual-permission checks before any context leaves the platform. Then I proved the whole thing worked: live signup rehearsals under throwaway identities, with a pass bar of zero manual database touches. JanetClaw went to production on July 20 on runbooks I wrote. 1,047 commits, 252,000 lines, ten weeks."
       ],
-      // drop image paths here (strings or { src, alt, caption } objects)
-      // e.g. 'images/janet-1.png' or { src: 'images/janet-1.png', caption: 'home' }
-      images: [],
+      images: [
+        { src: 'janetimgs/landing.webp',      alt: 'janet.ai landing page hero',                     caption: 'janet.ai · landing'          },
+        { src: 'janetimgs/inbox.webp',        layout: 'half', alt: 'inbox, agents assigning and updating tickets',   caption: 'inbox · agents at work'      },
+        { src: 'janetimgs/signals.webp',      layout: 'half', alt: 'signals view, ai-surfaced project insights',     caption: 'signals · surfaced insights' },
+        { src: 'janetimgs/signin-panel.webp', layout: 'tall', alt: 'sign in gradient panel',                         caption: 'sign in'                     },
+        { src: 'janetimgs/kanban.webp',       layout: 'wide', alt: 'project kanban, agents own tickets end to end',  caption: 'kanban · agents own tickets' }
+      ],
       tags: ['Python', 'FastAPI', 'TypeScript', 'Kubernetes', 'Postgres', 'Stripe', 'Temporal', 'Composio'],
       meta: {
         role: 'Led JanetClaw · flagship product',
@@ -2697,7 +2738,7 @@
     document.getElementById('case-hero-corner').textContent = data.corner || 'SYS · 00';
   }
 
-  function openCase(slug) {
+  function openCase(slug, sourceEl) {
     if (caseIsOpen) return;
     const data = WORKS[slug];
     if (!data) return;
@@ -2714,7 +2755,7 @@
     // them stuck at opacity:0 — gsap.set/gsap.to both get a real node list.
     const caseTitleChars = titleText.querySelectorAll('.char');
 
-    // pre-hide every revealable bit; the burst sequence will tween them in.
+    // pre-hide every revealable bit; the entry sequence tweens them in.
     gsap.set(caseTitleChars,                                        { opacity: 0, y: 22 });
     gsap.set(['#case-eyebrow', '#case-lede'],                       { opacity: 0, y: 14 });
     gsap.set('#case-body p',                                        { opacity: 0, y: 12 });
@@ -2722,7 +2763,7 @@
     gsap.set('#case-media figure',                                  { opacity: 0, y: 18 });
     gsap.set(['#case-tags .case-tag', '#case-meta .case-meta-row'], { opacity: 0, y: 10 });
     gsap.set('.case-hero',                                          { opacity: 0 });
-    // stash for the burst sequence
+    // stash for the reveal sequence
     caseEl._titleChars = caseTitleChars;
 
     caseEl.classList.add('is-open');
@@ -2731,7 +2772,24 @@
     lenis.stop();
     caseEl.scrollTop = 0;
 
-    runBurstSequence(slug, data);
+    // clicking a row: the row's own terminal-glitch canvas expands from
+    // its rect to fill the viewport, fully opaque by the time it covers
+    // the screen, then drains to reveal the case page loaded underneath.
+    // No source rect (hash deep-link on load) falls back to the old
+    // centered title-burst, since there's nowhere for a glitch to expand
+    // FROM.
+    if (sourceEl && window.__caseGlitchTransition) {
+      window.__caseGlitchTransition(sourceEl, slug, () => {
+        // fires the instant the curtain fully covers the viewport — snap
+        // caseEl opaque HERE, hidden behind the opaque glitch canvas, so
+        // nothing flashes when the curtain drains a beat later.
+        gsap.set(caseEl, { opacity: 1, scale: 1, filter: 'blur(0px)' });
+        revealCaseContent(slug, data, 0.05);
+      });
+      try { history.pushState({ case: slug }, '', `#case/${slug}`); } catch (e) {}
+    } else {
+      runBurstSequence(slug, data);
+    }
   }
 
   function runBurstSequence(slug, data) {
@@ -2827,26 +2885,27 @@
       }
     });
 
-    // ── Phase 4: case-page content staggers in on the tail of the reveal.
-    // All sub-tweens share power3.out (the house "out" curve, matching the
-    // hero + section reveals on the home page) and a 0.6s emphatic-scale
-    // duration. The delay schedule still gives the content its musical
-    // pacing — eyebrow → title → lede → body → note → tags → meta — but
-    // each beat now lands with the same curve.
-    const REVEAL_DELAY = HOLD_END + 0.3;
-    gsap.to(caseEl._titleChars || '.case-title .case-title-text .char', { opacity: 1, y: 0, duration: 0.6, stagger: 0.02, ease: 'power3.out', delay: REVEAL_DELAY + 0.06 });
-    gsap.to('#case-eyebrow',                      { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out', delay: REVEAL_DELAY });
-    gsap.to('#case-lede',                         { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out', delay: REVEAL_DELAY + 0.18 });
-    gsap.to('#case-body p',                       { opacity: 1, y: 0, duration: 0.6, stagger: 0.04, ease: 'power3.out', delay: REVEAL_DELAY + 0.26 });
-    gsap.to('#case-note',                         { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out', delay: REVEAL_DELAY + 0.34 });
-    gsap.to('#case-tags .case-tag',               { opacity: 1, y: 0, duration: 0.6, stagger: 0.04, ease: 'power3.out', delay: REVEAL_DELAY + 0.40 });
-    gsap.to('#case-meta .case-meta-row',          { opacity: 1, y: 0, duration: 0.6, stagger: 0.05, ease: 'power3.out', delay: REVEAL_DELAY + 0.46 });
-    gsap.to('.case-hero',                         { opacity: 1, duration: 0.6, ease: 'power3.out', delay: REVEAL_DELAY + 0.08 });
-    // image collage takes the right column when present — stagger its figures
-    // in alongside the hero so the right side feels alive at the same beat.
-    gsap.to('#case-media figure',                 { opacity: 1, y: 0, duration: 0.6,  stagger: 0.07, ease: 'power3.out', delay: REVEAL_DELAY + 0.12 });
+    revealCaseContent(slug, data, HOLD_END + 0.3);
 
     try { history.pushState({ case: slug }, '', `#case/${slug}`); } catch (e) {}
+  }
+
+  // case-page content staggers in — eyebrow → title → lede → body → note →
+  // tags → meta, one shared power3.out curve (the house "out" curve, same
+  // as the hero + section reveals on the home page). Used by both entry
+  // paths: the burst's Phase 4, and the glitch-expand transition's drain.
+  function revealCaseContent(slug, data, delay) {
+    gsap.to(caseEl._titleChars || '.case-title .case-title-text .char', { opacity: 1, y: 0, duration: 0.6, stagger: 0.02, ease: 'power3.out', delay: delay + 0.06 });
+    gsap.to('#case-eyebrow',                      { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out', delay });
+    gsap.to('#case-lede',                         { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out', delay: delay + 0.18 });
+    gsap.to('#case-body p',                       { opacity: 1, y: 0, duration: 0.6, stagger: 0.04, ease: 'power3.out', delay: delay + 0.26 });
+    gsap.to('#case-note',                         { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out', delay: delay + 0.34 });
+    gsap.to('#case-tags .case-tag',               { opacity: 1, y: 0, duration: 0.6, stagger: 0.04, ease: 'power3.out', delay: delay + 0.40 });
+    gsap.to('#case-meta .case-meta-row',          { opacity: 1, y: 0, duration: 0.6, stagger: 0.05, ease: 'power3.out', delay: delay + 0.46 });
+    gsap.to('.case-hero',                         { opacity: 1, duration: 0.6, ease: 'power3.out', delay: delay + 0.08 });
+    // image collage takes the right column when present — stagger its figures
+    // in alongside the hero so the right side feels alive at the same beat.
+    gsap.to('#case-media figure',                 { opacity: 1, y: 0, duration: 0.6,  stagger: 0.07, ease: 'power3.out', delay: delay + 0.12 });
   }
 
   function closeCase() {
@@ -2896,7 +2955,7 @@
 
   /* wire up clicks on work rows */
   document.querySelectorAll('.work-item[data-slug]').forEach(el => {
-    el.addEventListener('click', () => openCase(el.dataset.slug));
+    el.addEventListener('click', () => openCase(el.dataset.slug, el));
   });
 
   caseBackEl.addEventListener('click', closeCase);
@@ -2966,6 +3025,12 @@
       uniform float uCurvature;
       uniform vec3  uTint;
       uniform float uBrightness;
+      // dim accent-tinted floor under "off" glyph cells — 0 keeps the row
+      // hover pixel-identical (pure black voids, as shipped); the
+      // full-viewport case-transition raises this so the same noise
+      // pattern reads as a bold colored sweep instead of patchy black
+      // holes blown up to screen size.
+      uniform float uFloor;
       float time;
 
       float hash21(vec2 p){ p = fract(p * 234.56); p += dot(p, p + 34.56); return fract(p.x * p.y); }
@@ -3033,6 +3098,7 @@
           col.b = getColor(p - ca).b;
         }
         col *= uTint; col *= uBrightness;
+        col = max(col, uTint * uBrightness * uFloor);
         if (uDither > 0.0) { float rnd = hash21(gl_FragCoord.xy); col += (rnd - 0.5) * (uDither * 0.003922); }
         // opaque output: dark background + accent-tinted glyphs.
         gl_FragColor = vec4(col, 1.0);
@@ -3078,7 +3144,8 @@
         uDither:              { value: 0.0 },
         uCurvature:           { value: 0.0 },
         uTint:                { value: new Color(1, 1, 1) },
-        uBrightness:          { value: 1.85 }
+        uBrightness:          { value: 1.85 },
+        uFloor:               { value: 0.0 }   // hover: unchanged, pure black voids
       }
     });
     const mesh = new Mesh(gl, { geometry, program });
@@ -3245,6 +3312,101 @@
     }
 
     window.addEventListener('resize', resizeToCurrent);
+
+    /* ── case-open transition: the clicked row's OWN glitch, expanded ──
+       Reuses this module's vertex/fragment shader source and per-slug
+       personality table so the transition is visibly the same effect as
+       the hover, not a lookalike — a dedicated Renderer/Program/Mesh
+       (not the shared hover instance, which stays owned by whichever row
+       is hovered/focused) fills a clip-path that starts matching the
+       row's exact rect and animates to full-viewport, then drains to
+       reveal the case page loaded underneath. One-shot, so cost is a
+       non-issue on any device — no IS_TOUCH branching needed here. */
+    function playCaseTransition(rowEl, slug, onMidpoint) {
+      const host = document.getElementById('case-glitch-transition');
+      if (!host) { if (onMidpoint) onMidpoint(); return; }
+      host.innerHTML = '';
+      host.classList.add('is-active');
+
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const tRenderer = new Renderer({ dpr, alpha: false });
+      const tGl = tRenderer.gl;
+      tGl.clearColor(0, 0, 0, 1);
+      host.appendChild(tGl.canvas);
+
+      const p = PER_SLUG[slug] || DEFAULTS;
+      const tProgram = new Program(tGl, {
+        vertex: vertexShader,
+        fragment: fragmentShader,
+        uniforms: {
+          iTime:                { value: 0 },
+          iResolution:          { value: new Color(1, 1, 1) },
+          uScale:               { value: p.scale },
+          uGridMul:             { value: new Float32Array([p.gridX, p.gridY]) },
+          uDigitSize:           { value: p.digit },
+          uScanlineIntensity:   { value: p.scan },
+          // hotter than the idle hover — this is a burst, not ambient noise
+          uGlitchAmount:        { value: p.glitch * 1.35 },
+          uFlickerAmount:       { value: p.flicker * 1.3 },
+          uNoiseAmp:            { value: p.noise * 1.2 },
+          uChromaticAberration: { value: 0.0 },
+          uDither:              { value: 0.0 },
+          uCurvature:           { value: 0.0 },
+          uTint:                { value: new Color(1, 1, 1) },
+          uBrightness:          { value: p.bright },
+          uFloor:               { value: 0.0 }   // black background, matching the row hover
+        }
+      });
+      const tMesh = new Mesh(tGl, { geometry: new Triangle(tGl), program: tProgram });
+
+      const accent = (rowEl.style.getPropertyValue('--accent') || '#ffffff').trim();
+      const [r, g, b] = hexToRgb(accent);
+      tProgram.uniforms.uTint.value = new Color(r, g, b);
+
+      tRenderer.setSize(window.innerWidth, window.innerHeight);
+      tProgram.uniforms.iResolution.value = new Color(
+        tGl.canvas.width, tGl.canvas.height, tGl.canvas.width / tGl.canvas.height
+      );
+
+      const tt0 = performance.now();
+      const speed = (p.speed || DEFAULTS.speed) * 1.8;   // faster churn than the idle hover
+      let tRaf = 0;
+      function tick() {
+        tRaf = requestAnimationFrame(tick);
+        tProgram.uniforms.iTime.value = (performance.now() - tt0) * 0.001 * speed;
+        tRenderer.render({ scene: tMesh });
+      }
+      // paint one frame synchronously before the clip-path starts growing,
+      // so the very first visible pixels already show the glitch rather
+      // than a blank canvas catching up a frame late.
+      tRenderer.render({ scene: tMesh });
+
+      const rect = rowEl.getBoundingClientRect();
+      host.style.clipPath =
+        `inset(${rect.top}px ${window.innerWidth - rect.right}px ` +
+        `${window.innerHeight - rect.bottom}px ${rect.left}px)`;
+      host.style.opacity = '1';
+      tRaf = requestAnimationFrame(tick);
+
+      gsap.timeline()
+        .to(host, {
+          clipPath: 'inset(0px 0px 0px 0px)', duration: 0.55, ease: 'power3.inOut',
+          // fires the instant full-viewport coverage is reached — the
+          // caller snaps the case page opaque HERE, hidden behind this
+          // still-opaque canvas, so the drain below never flashes.
+          onComplete: () => { if (onMidpoint) onMidpoint(); }
+        })
+        .to(host, {
+          opacity: 0, duration: 0.5, ease: 'power3.in', delay: 0.1,
+          onComplete: () => {
+            cancelAnimationFrame(tRaf);
+            host.classList.remove('is-active');
+            host.innerHTML = '';
+            host.style.clipPath = '';
+          }
+        });
+    }
+    window.__caseGlitchTransition = playCaseTransition;
   }
 
   /* ─── VIDEO HERO controller ─────────────────────────────────────────
@@ -3290,11 +3452,19 @@
     let set  = 'rayquaza';        // rayquaza | gyarados
     let paused = false;
 
+    // every clip's first 1.5s is the baked loop crossfade — its own tail
+    // dissolving over its head (that's what makes <video loop> seamless).
+    // Fine to pass THROUGH while looping; ugly to START on: a fresh load
+    // at t=0 opens on a double-exposure, worst on gyarados where the two
+    // ghosts swim opposite directions. So fresh loads begin just past it.
+    const XFADE_S = 1.5;
+
     // first paint; signals the SAME __heroReady handshake the iframe
     // used, so the preloader + .is-live fade need zero changes.
     front.src = src(clip);
     front.addEventListener('canplay', function once() {
       front.removeEventListener('canplay', once);
+      try { front.currentTime = XFADE_S; } catch (e) {}
       front.classList.add('on');
       front.play().catch(() => {});
       window.postMessage({ __heroReady: true }, '*');
@@ -3314,6 +3484,7 @@
       b.addEventListener('canplay', function once() {
         b.removeEventListener('canplay', once);
         if (clip !== next) return;           // superseded mid-load
+        try { b.currentTime = XFADE_S; } catch (e) {}   // skip the baked loop blend
         b.play().catch(() => {});
         b.classList.add('on');
         front.classList.remove('on');
@@ -3504,6 +3675,16 @@
        • the page scrolls freely past the hero (no iframe touch-trap).
      We compute amplitude from an AnalyserNode and push it straight into
      the same-origin iframe via `__heroAmp` so the scene stays reactive. */
+  // ── track list: drop an mp3 into music/, add one line here, done.
+  // name is what shows in the player (falls back to the filename if
+  // omitted). bg-music.mp3 ships as track 0 so the player always has
+  // something to play; the switch button stays hidden until a second
+  // entry exists (see #track-switch's default display:none).
+  const TRACKS = [
+    { src: 'music/bg-music.mp3', name: 'bg music' },
+    { src: 'music/02-doomsday.mp3', name: 'doomsday' },
+  ];
+
   (function () {
     const audio   = document.getElementById('bg-audio');
     const frame   = document.getElementById('hero-frame');
@@ -3517,6 +3698,8 @@
     const toggleBtn = document.getElementById('music-toggle');
     const iconPlay  = document.getElementById('icon-play');
     const iconPause = document.getElementById('icon-pause');
+    const trackBtn  = document.getElementById('track-switch');
+    const trackName = document.getElementById('track-switch-name');
 
     let audioCtx = null, analyser = null, gainNode = null, bytes = null;
     let ready = false, started = false;
@@ -3678,12 +3861,21 @@
        cross-frame writes at 60fps for a silent page. Paused → one wave
        clear, zero per-frame work. */
     let waveCleared = false;
+    // raw per-frame FFT amplitude is jittery — the live scene never uses it
+    // directly either (see rayquaza-flying-clean.html's pkWet.uPulse lerp,
+    // `+= (amp - uPulse) * 0.35`). The video-mode brightness filter had been
+    // fed the RAW value with no smoothing at all, so the whole hero visibly
+    // flickered in time with the FFT's frame-to-frame noise instead of
+    // breathing with the music. Same lerp constant, applied once here so
+    // both consumers (iframe scene + video hook) see the same smoothed value.
+    let ampSmooth = 0;
     function pumpAmp() {
       requestAnimationFrame(pumpAmp);
       if (!ready) return;
       if (audio.paused) {
         if (!waveCleared) {
           waveCleared = true;
+          ampSmooth = 0;
           if (waveCtx) waveCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
           if (frame && frame.contentWindow) { try { frame.contentWindow.__heroAmp = 0; } catch (e) {} }
           if (window.__heroVideoAmp) window.__heroVideoAmp(0);
@@ -3705,10 +3897,11 @@
           : 0;
         amp = Math.max(0, Math.min(1, amp));
       }
+      ampSmooth += (amp - ampSmooth) * 0.35;
       if (frame && frame.contentWindow) {
-        try { frame.contentWindow.__heroAmp = amp; } catch (e) {}
+        try { frame.contentWindow.__heroAmp = ampSmooth; } catch (e) {}
       }
-      if (window.__heroVideoAmp) window.__heroVideoAmp(amp);
+      if (window.__heroVideoAmp) window.__heroVideoAmp(ampSmooth);
       drawWave();
     }
     requestAnimationFrame(pumpAmp);
@@ -3784,6 +3977,37 @@
     });
     audio.addEventListener('play',  refreshIcons);
     audio.addEventListener('pause', refreshIcons);
+
+    // ── track switcher: cycles through TRACKS. createMediaElementSource
+    // binds to the <audio> ELEMENT, not a specific file, so swapping .src
+    // and calling .load() keeps flowing through the same analyser/gain
+    // graph — no need to rebuild anything on switch.
+    let trackIndex = TRACKS.findIndex(t => t.src === audio.getAttribute('src'));
+    if (trackIndex < 0) trackIndex = 0;
+    function trackLabel(t) {
+      if (t.name) return t.name;
+      return t.src.split('/').pop().replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
+    }
+    function applyTrack(i) {
+      const wasPlaying = !audio.paused;
+      trackIndex = ((i % TRACKS.length) + TRACKS.length) % TRACKS.length;
+      audio.src = TRACKS[trackIndex].src;
+      audio.load();
+      if (wasPlaying) audio.play().catch(() => {});
+      if (trackName) trackName.textContent = trackLabel(TRACKS[trackIndex]);
+    }
+    if (trackBtn) {
+      // explicit 'flex' (not '' ) — the CSS default for #track-switch is
+      // display:none, and clearing an inline style falls back to THAT,
+      // not to the shared button rule's display:flex (same specificity,
+      // later in source order wins the cascade either way).
+      trackBtn.style.display = TRACKS.length > 1 ? 'flex' : 'none';
+      trackBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        applyTrack(trackIndex + 1);
+      });
+    }
+    if (trackName) trackName.textContent = trackLabel(TRACKS[trackIndex]);
 
     syncRange();
     refreshIcons();
