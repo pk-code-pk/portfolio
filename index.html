@@ -247,17 +247,33 @@
     }
 
     /* ─── nav ─── */
+    /* floating pill bar, not an edge-to-edge overlay: inset from all
+       three sides so the page background shows around it (same "floating
+       chrome" language as #music-player), stadium-shaped corners.
+       Gets slightly more opaque + a soft shadow once you scroll
+       (.is-scrolled) so it reads as something that's actually there. */
     nav {
       position: fixed;
-      top: 0; left: 0; right: 0;
+      top: 14px; left: 14px; right: 14px;
       height: var(--nav-h);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 var(--pad);
+      padding: 0 28px;
       z-index: 100;
       color: #fff;
       font-family: var(--font-body);
+      border-radius: 999px;
+      background: rgba(10, 12, 22, 0.55);
+      backdrop-filter: blur(16px) saturate(140%);
+      -webkit-backdrop-filter: blur(16px) saturate(140%);
+      border: 1px solid rgba(255,255,255,0.08);
+      transition: background .3s ease, border-color .3s ease, box-shadow .3s ease;
+    }
+    nav.is-scrolled {
+      background: rgba(8, 9, 18, 0.78);
+      border-color: rgba(255,255,255,0.12);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.35);
     }
 
     .nav-logo {
@@ -266,39 +282,68 @@
       font-weight: 600;
       letter-spacing: -.01em;
       text-transform: lowercase;
+      text-decoration: none;
+      color: inherit;
+      cursor: pointer;
+      transition: opacity var(--t-standard) var(--ease-out);
     }
+    .nav-logo:hover { opacity: 0.7; }
+    .nav-logo-short { display: none; }
 
     .nav-links {
-      /* 3-col grid centered on the MIDDLE link: equal side columns mean
-         "about" sits on the exact center axis and "work"/"contact" mirror
-         each other around it — symmetric, not just box-centered. */
-      display: grid;
-      grid-template-columns: 1fr auto 1fr;
+      /* plain centered flex row: the WHOLE group centers as one block via
+         left:50%/translateX(-50%), which is reliable at every viewport.
+         (previously this tried to force "About" onto the exact center
+         pixel via a 1fr-auto-1fr grid + justify-self — that only works
+         when there's leftover space for the fr tracks to distribute
+         evenly, which broke down at some widths/font-sizes since
+         Work/Contact are different text lengths. A centered flex row
+         degrades gracefully instead of fighting the browser for it.) */
+      display: flex;
       align-items: center;
-      column-gap: clamp(18px, 3vw, 48px);
+      justify-content: center;
+      gap: clamp(18px, 3vw, 48px);
       position: absolute;
       left: 50%;
       transform: translateX(-50%);
       text-align: center;
+      /* no capsule outline here — the outer nav IS the pill now; this is
+         just the positioning box for the links + hover indicator. */
+      padding: 7px 6px;
     }
-    .nav-links a:nth-child(1) { justify-self: end; }     /* work → toward center */
-    .nav-links a:nth-child(2) { justify-self: center; }  /* about → dead center */
-    .nav-links a:nth-child(3) { justify-self: start; }   /* contact → toward center */
 
     .nav-links a {
+      position: relative;
+      z-index: 1;
       font-size: .76rem;
       font-weight: 400;
       letter-spacing: .02em;
       text-decoration: none;
       color: inherit;
+      padding: 6px 14px;
+      border-radius: 999px;
       transition: opacity var(--t-standard) var(--ease-out);
     }
 
     .nav-links a:hover {
-      opacity: 0.5;
-      /* text-shadow:
-        -2px 0 0 rgba(0, 80, 220, 0.6),
-         2px 0 0 rgba(0, 180, 255, 0.6); */
+      opacity: 0.7;
+    }
+
+    /* sliding highlight that glides between links on hover — position/
+       width set in JS from the hovered link's own rect, so it always
+       matches regardless of label length. Sits behind the link text
+       (z-index 0 vs the anchors' 1); fades out on mouseleave instead of
+       snapping, so there's no highlight resting on a link at page load. */
+    .nav-pill-indicator {
+      position: absolute;
+      top: 4px; height: calc(100% - 8px);
+      left: 0; width: 0;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      opacity: 0;
+      pointer-events: none;
+      z-index: 0;
+      transition: transform .35s cubic-bezier(.65,0,.35,1), width .35s cubic-bezier(.65,0,.35,1), opacity .2s ease;
     }
 
     .nav-clock {
@@ -384,16 +429,54 @@
     }
     #poke-switch:hover, #live-toggle:hover, #track-switch:hover { color: #fff; transform: scale(1.06); }
     #poke-switch svg, #live-toggle svg, #track-switch svg { width: 15px; height: 15px; display: block; }
-    /* only shown once a second track exists — see TRACKS in the audio
-       engine script; toggled via inline style, not a class, so there's
-       no flash-of-visible-button before JS decides */
-    #track-switch { display: none; }
     /* narrow phones: the bar can't fit several labeled buttons — drop the
        text labels, keep the icons */
     @media (max-width: 480px) {
       #poke-switch .poke-name, #live-toggle .poke-name, #track-switch .poke-name { display: none; }
       #poke-switch, #live-toggle, #track-switch { padding: 4px 5px; }
     }
+    @media (max-width: 480px) {
+      #music-player { gap: 10px; padding: 8px 12px; bottom: 16px; }
+    }
+    /* ─── dropdown menus (poke-switch / track-switch) — same pill look as
+       the rest of the bar, opens upward since the player sits fixed at
+       the bottom of the viewport ─── */
+    .dd { position: relative; display: inline-flex; }
+    /* only shown once a second track exists — see TRACKS in the audio
+       engine script; toggled via inline style on the WRAPPER (not the
+       button) so the chevron + menu hide along with it */
+    #track-dd { display: none; }
+    .dd-chevron { width: 10px; height: 10px; display: block; margin-left: -2px; transition: transform .2s ease; }
+    .dd[data-open="true"] .dd-chevron { transform: rotate(180deg); }
+    .dd-menu {
+      position: absolute; bottom: calc(100% + 10px); left: 50%;
+      transform: translateX(-50%) translateY(6px);
+      width: max-content; min-width: 100%;
+      background: rgba(10, 12, 22, 0.92);
+      backdrop-filter: blur(14px) saturate(120%);
+      -webkit-backdrop-filter: blur(14px) saturate(120%);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px; padding: 4px;
+      opacity: 0; visibility: hidden; pointer-events: none;
+      transition: opacity .18s ease, transform .18s ease, visibility 0s linear .18s;
+      z-index: 60;
+    }
+    .dd[data-open="true"] .dd-menu {
+      opacity: 1; visibility: visible; pointer-events: auto;
+      transform: translateX(-50%) translateY(0);
+      transition: opacity .18s ease, transform .18s ease;
+    }
+    .dd-item {
+      display: block; width: 100%; text-align: left;
+      background: none; border: none; padding: 7px 12px; border-radius: 8px;
+      color: rgba(255,255,255,0.7); cursor: pointer;
+      font: 600 11px/1 'Hanken Grotesk', ui-monospace, monospace;
+      letter-spacing: .1em; text-transform: lowercase; white-space: nowrap;
+      transition: background .15s, color .15s;
+    }
+    .dd-item:hover, .dd-item:focus-visible { background: rgba(255,255,255,0.12); color: #fff; }
+    .dd-item[aria-selected="true"] { color: #fff; }
+    .dd-item[aria-selected="true"]::before { content: '\2713  '; opacity: .55; }
     /* invisible counterweight = play button (18px svg + 4px×2 padding) so
        the slider track sits on the exact viewport-center axis */
     .np-balance { width: 26px; flex: 0 0 26px; }
@@ -404,6 +487,17 @@
       opacity: 0.7;
     }
     .slider-wrapper.is-hover { transform: scale(1.18); opacity: 1; }
+    /* the bar's fixed-width parts (200px volume slider + per-item gaps +
+       padding) add up to ~370-410px depending on which controls are
+       visible — wider than most phones, so on narrow viewports it
+       overflowed off both edges instead of just centering smaller.
+       Shrink the slider so the whole pill fits with room on each side.
+       (placed AFTER the base .slider-wrapper rule above on purpose — same
+       specificity, so source order decides, and an earlier media-queried
+       copy would lose to that later plain rule regardless of viewport.) */
+    @media (max-width: 480px) {
+      .slider-wrapper { width: clamp(70px, 22vw, 120px); gap: 8px; }
+    }
     .slider-wrapper .vol-icon {
       width: 16px; height: 16px; color: rgba(255,255,255,0.65);
       display: flex; align-items: center; justify-content: center;
@@ -1675,9 +1769,29 @@
 
     @media (max-width: 880px) {
       :root { --pad: clamp(16px, 5vw, 24px); }
-      nav { mix-blend-mode: normal; color: var(--fg); background: rgba(0,0,0,0.72); backdrop-filter: blur(10px); }
-      .nav-links { gap: clamp(12px, 3vw, 18px); }
+      /* base nav rule already gives the floating pill a solid-enough
+         blurred background — mobile just needs a bit less side padding
+         and no clock (see .nav-clock below). */
+      nav { top: 10px; left: 10px; right: 10px; padding: 0 var(--pad); }
+      .nav-links { column-gap: clamp(10px, 3vw, 18px); }
+      .nav-links a { padding: 6px 8px; font-size: .72rem; }
       .nav-clock { display: none; }
+      /* live 3D toggle is a desktop-only opt-in (boots the real WebGL
+         scene in place of the baked video) — mobile GPUs shouldn't be
+         asked to run it, so the control doesn't even show there. */
+      #live-toggle { display: none; }
+    }
+    /* logo text doesn't scale down with the viewport (it's not part of the
+       flex flow's width math — .nav-links is position:absolute and centers
+       itself independent of the logo's rendered width), so on narrow
+       phones "Praneel Khiantani" runs straight into the centered links.
+       Swap to the short "pk" mark before that happens. */
+    @media (max-width: 480px) {
+      .nav-logo-full { display: none; }
+      .nav-logo-short { display: inline; font-size: 1rem; }
+      .nav-links { column-gap: 6px; }
+      .nav-links a { padding: 6px 6px; font-size: .68rem; }
+      nav { padding: 0 14px; }
 
       /* hero: title pinned near bottom (like desktop) so the dot pattern
          lives above as atmosphere instead of dead space below it. */
@@ -1844,8 +1958,12 @@
 
 <!-- ── nav ── -->
 <nav>
-  <div class="nav-logo">Praneel Khiantani</div>
+  <a href="#top" class="nav-logo" id="nav-logo-home">
+    <span class="nav-logo-full">Praneel Khiantani</span>
+    <span class="nav-logo-short">pk</span>
+  </a>
   <div class="nav-links">
+    <span class="nav-pill-indicator" id="nav-pill"></span>
     <a href="#work">Work</a>
     <a href="#about">About</a>
     <a href="#contact">Contact</a>
@@ -1900,17 +2018,26 @@
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 4V5L7 9H3zm10.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>
     </div>
   </div>
-  <!-- track switch: cycles the background track — see TRACKS in the audio
-       engine script. hidden by default, shown only once TRACKS.length > 1 -->
-  <button id="track-switch" aria-label="Next track" title="Next track">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4l10 8-10 8V4z"/><path d="M19 5v14"/></svg>
-    <span class="poke-name" id="track-switch-name"></span>
-  </button>
-  <!-- pokemon switch: swaps the 3D hero creature in the iframe -->
-  <button id="poke-switch" aria-label="Switch pokemon" title="Switch pokemon">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-    <span class="poke-name" id="poke-switch-name">gyarados</span>
-  </button>
+  <!-- track switch: dropdown to pick the background track — see TRACKS in
+       the audio engine script. wrapper hidden by default, shown only once
+       TRACKS.length > 1 -->
+  <div class="dd" id="track-dd">
+    <button id="track-switch" class="dd-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Choose track" title="Choose track">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4l10 8-10 8V4z"/><path d="M19 5v14"/></svg>
+      <span class="poke-name" id="track-switch-name"></span>
+      <svg class="dd-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="dd-menu" id="track-dd-menu" role="listbox"></div>
+  </div>
+  <!-- pokemon switch: dropdown to pick the 3D hero creature -->
+  <div class="dd" id="poke-dd">
+    <button id="poke-switch" class="dd-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Choose pokemon" title="Choose pokemon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      <span class="poke-name" id="poke-switch-name">switch pkmn</span>
+      <svg class="dd-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="dd-menu" id="poke-dd-menu" role="listbox"></div>
+  </div>
   <!-- live-3d toggle: boots the real WebGL scene on demand; default hero
        is the pre-baked video (no GL, no heat) -->
   <button id="live-toggle" aria-label="Toggle live 3D" title="Toggle live 3D">
@@ -2433,11 +2560,42 @@
   updateClock();
   setInterval(updateClock, 1000);
 
+  /* ─── nav: real top bar, not painted-on overlay ────────────────────
+     1) .is-scrolled once you leave the very top — bar goes from a soft
+        translucent wash to a more solid, shadowed bar (see nav CSS).
+     2) pill-nav sliding indicator: glides to whichever link is hovered,
+        sized off that link's own rect so it works regardless of label
+        width; fades out on mouseleave rather than resting anywhere. */
+  (function () {
+    const navEl = document.querySelector('nav');
+    if (navEl) {
+      const syncNavScrolled = () => navEl.classList.toggle('is-scrolled', window.scrollY > 4);
+      syncNavScrolled();
+      lenis.on('scroll', syncNavScrolled);
+    }
+
+    const linksWrap = document.querySelector('.nav-links');
+    const indicator = document.getElementById('nav-pill');
+    if (!linksWrap || !indicator) return;
+    const links = linksWrap.querySelectorAll('a');
+    function moveIndicatorTo(link) {
+      const wrapRect = linksWrap.getBoundingClientRect();
+      const linkRect = link.getBoundingClientRect();
+      indicator.style.width = linkRect.width + 'px';
+      indicator.style.transform = `translateX(${linkRect.left - wrapRect.left}px)`;
+      indicator.style.opacity = '1';
+    }
+    links.forEach((link) => link.addEventListener('mouseenter', () => moveIndicatorTo(link)));
+    linksWrap.addEventListener('mouseleave', () => { indicator.style.opacity = '0'; });
+  })();
+
   /* ─── anchor scroll via lenis ─── */
   document.querySelectorAll('a[href^="#"]').forEach(a => {
     a.addEventListener('click', e => {
       e.preventDefault();
-      const target = document.querySelector(a.getAttribute('href'));
+      const href = a.getAttribute('href');
+      if (href === '#top') { lenis.scrollTo(0); return; }  // nav-logo → back to hero
+      const target = document.querySelector(href);
       if (target) lenis.scrollTo(target, { offset: -60 });
     });
   });
@@ -3603,26 +3761,73 @@
     }, { passive: true });
   })();
 
-  /* ─── pokemon switch button → tells the hero iframe to swap creature ──
+  /* ─── generic dropdown: wires a .dd wrapper (trigger button + .dd-menu)
+     into an open/close/select menu. Vanilla JS/CSS — matches the bar's
+     existing pill look, no framework needed for a 2-3 item list.
+       items: [{ label }], getCurrentIndex(): number, onSelect(i): void
+     Only one dropdown open at a time; closes on outside click / Escape. */
+  function setupDropdown(ddId, menuId, items, getCurrentIndex, onSelect) {
+    const dd = document.getElementById(ddId);
+    const trigger = dd && dd.querySelector('.dd-trigger');
+    const menu = document.getElementById(menuId);
+    if (!dd || !trigger || !menu) return null;
+    function render() {
+      const curIdx = getCurrentIndex();
+      menu.innerHTML = '';
+      items.forEach((item, i) => {
+        const opt = document.createElement('button');
+        opt.type = 'button';
+        opt.className = 'dd-item';
+        opt.setAttribute('role', 'option');
+        opt.setAttribute('aria-selected', i === curIdx ? 'true' : 'false');
+        opt.textContent = item.label;
+        opt.addEventListener('click', (e) => {
+          e.stopPropagation();
+          close();
+          onSelect(i);
+          render();
+        });
+        menu.appendChild(opt);
+      });
+    }
+    function open() { dd.setAttribute('data-open', 'true'); trigger.setAttribute('aria-expanded', 'true'); }
+    function close() { dd.setAttribute('data-open', 'false'); trigger.setAttribute('aria-expanded', 'false'); }
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = dd.getAttribute('data-open') === 'true';
+      document.querySelectorAll('.dd[data-open="true"]').forEach((o) => { if (o !== dd) o.setAttribute('data-open', 'false'); });
+      if (isOpen) close(); else { render(); open(); }
+    });
+    document.addEventListener('click', (e) => { if (!dd.contains(e.target)) close(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    render();
+    return { render, close };
+  }
+
+  /* ─── pokemon switch dropdown → tells the hero iframe to swap creature ──
      The scene's own toggle is hidden when embedded, so the parent owns
-     this control. Clicking postMessages {__heroAction:'switchPokemon'}
-     into the iframe (same pattern as pause/resume). We track the name
-     locally to keep the button label in sync (hero starts on rayquaza). */
+     this control. Only 2 creatures exist and the hook (__heroVideoSwitch /
+     postMessage) only knows how to TOGGLE, not select directly — so
+     selecting the option that's already current is a no-op, and picking
+     the other one fires the same toggle the old cycle-button used. */
   (function () {
-    const btn  = document.getElementById('poke-switch');
     const frame = document.getElementById('hero-frame');
-    if (!btn || !frame) return;
-    const nameEl = document.getElementById('poke-switch-name');
+    if (!frame) return;
+    const POKEMON = [
+      { key: 'rayquaza', label: 'rayquaza' },
+      { key: 'gyarados', label: 'gyarados' },
+    ];
     let current = 'rayquaza';                 // hero's default creature
-    const other = () => current === 'rayquaza' ? 'gyarados' : 'rayquaza';
-    if (nameEl) nameEl.textContent = other(); // label shows what you'll switch TO
-    btn.addEventListener('click', () => {
-      // video mode: crossfade to the other creature's baked clip
+    // label stays static ("switch pkmn") — the checkmark in the open
+    // menu shows which one's current, not the button text.
+    function selectPokemon(i) {
+      const target = POKEMON[i].key;
+      if (target === current) return;
       if (window.__heroVideoSwitch) window.__heroVideoSwitch();
       else if (frame.contentWindow) frame.contentWindow.postMessage({ __heroAction: 'switchPokemon' }, '*');
-      current = other();
-      if (nameEl) nameEl.textContent = other();
-    });
+      current = target;
+    }
+    setupDropdown('poke-dd', 'poke-dd-menu', POKEMON, () => POKEMON.findIndex((p) => p.key === current), selectPokemon);
   })();
 
   /* ─── forward hero clicks/taps into the 3D iframe ─────────────────────
@@ -3681,7 +3886,7 @@
   // something to play; the switch button stays hidden until a second
   // entry exists (see #track-switch's default display:none).
   const TRACKS = [
-    { src: 'music/bg-music.mp3', name: 'bg music' },
+    { src: 'music/bg-music.mp3', name: 'astrothunder' },
     { src: 'music/02-doomsday.mp3', name: 'doomsday' },
   ];
 
@@ -3994,20 +4199,22 @@
       audio.src = TRACKS[trackIndex].src;
       audio.load();
       if (wasPlaying) audio.play().catch(() => {});
-      if (trackName) trackName.textContent = trackLabel(TRACKS[trackIndex]);
+      // button label stays static ("bg music") regardless of which track
+      // is playing — the checkmark in the open menu shows the real pick.
     }
-    if (trackBtn) {
-      // explicit 'flex' (not '' ) — the CSS default for #track-switch is
+    const trackDD = document.getElementById('track-dd');
+    if (trackBtn && trackDD) {
+      // explicit 'flex' (not '' ) — the CSS default for #track-dd is
       // display:none, and clearing an inline style falls back to THAT,
-      // not to the shared button rule's display:flex (same specificity,
-      // later in source order wins the cascade either way).
-      trackBtn.style.display = TRACKS.length > 1 ? 'flex' : 'none';
-      trackBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        applyTrack(trackIndex + 1);
-      });
+      // not to .dd's display:inline-flex rule (same specificity, later
+      // in source order wins the cascade either way).
+      trackDD.style.display = TRACKS.length > 1 ? 'flex' : 'none';
+      setupDropdown('track-dd', 'track-dd-menu',
+        TRACKS.map((t) => ({ label: trackLabel(t) })),
+        () => trackIndex,
+        (i) => applyTrack(i));
     }
-    if (trackName) trackName.textContent = trackLabel(TRACKS[trackIndex]);
+    if (trackName) trackName.textContent = 'bg music';
 
     syncRange();
     refreshIcons();
