@@ -42,6 +42,13 @@
        exists — the OTHER is display:none so it costs nothing. */
     .hero-vid { object-fit:cover; background:#000; pointer-events:none;
                 opacity:0 !important; transition:opacity .5s ease; }
+    /* rayquaza's baked clip reads darker than the live scene did — flat
+       compositor brightness lift, cheap (no re-bake needed). gyarados is
+       fine as baked, so this is scoped off once show() flips .is-gya on
+       (see the audio engine below). __heroVideoAmp's audio-pulse filter
+       folds this same base value in so the boost doesn't dip out when
+       music kicks in — and skips it too while .is-gya is set. */
+    .hero-3d:not(.is-gya) .hero-vid { filter: brightness(1.35) contrast(1.02); }
     .hero-3d.is-live .hero-vid.on { opacity:1 !important; }
     .hero-3d.mode-video iframe.hero-frame { display:none; }
     .hero-3d.mode-live  .hero-vid         { display:none; }
@@ -3640,6 +3647,9 @@
     function show(next) {
       if (clip === next) return;
       clip = next;
+      // brightness lift is rayquaza-only (that clip reads dark; gyarados
+      // doesn't) — see the .hero-3d.is-gya override in the CSS above.
+      heroEl.classList.toggle('is-gya', next === 'gya');
       back.src = src(next);
       const b = back;
       b.addEventListener('canplay', function once() {
@@ -3680,8 +3690,18 @@
         if (!paused && front.paused) front.play().catch(() => {});
       };
       window.__heroVideoAmp = (amp) => {
-        // compositor-only pulse standing in for the baked scene's uPulse
-        front.style.filter = amp > 0.01 ? `brightness(${(1 + amp * 0.22).toFixed(3)})` : '';
+        // compositor-only pulse standing in for the baked scene's uPulse.
+        // rayquaza-only brightness lift (see .hero-3d.is-gya in the CSS) —
+        // this inline filter would otherwise override that CSS scoping
+        // and boost gyarados too, so it checks the same class here.
+        if (heroEl.classList.contains('is-gya')) {
+          front.style.filter = amp > 0.01 ? `brightness(${(1 + amp * 0.22).toFixed(3)})` : '';
+          return;
+        }
+        // Base 1.35/contrast 1.02 matches the CSS .hero-vid lift — folding
+        // it in here (instead of clearing to '' when quiet) means the
+        // pulse never dips BELOW the baseline brightness at low amplitude.
+        front.style.filter = `brightness(${(1.35 + amp * 0.22).toFixed(3)}) contrast(1.02)`;
       };
     }
     installHooks();
@@ -3891,6 +3911,7 @@
   const TRACKS = [
     { src: 'music/bg-music.mp3', name: 'astrothunder' },
     { src: 'music/02-doomsday.mp3', name: 'doomsday' },
+    { src: 'music/highjack.mp3', name: 'right back' },
   ];
 
   (function () {
