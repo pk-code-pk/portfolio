@@ -542,13 +542,12 @@
       flex: 1; max-width: 420px; height: 36px; display: block;
     }
 
-    /* mobile: stack the strip — the row layout squeezed the canvas to
-       ~0px between the two nowrap labels. Column = full-width waveform,
-       centered on screen. */
-    @media (max-width: 640px) {
-      .now-playing { flex-direction: column; gap: 12px; }
-      .now-playing .np-wave { flex: none; width: min(78vw, 340px); height: 40px; }
-    }
+    /* dropped entirely on mobile (see the shared 880px block below) — the
+       row layout used to squeeze the canvas to ~0px between the two
+       nowrap labels and get stacked into a column as a fix, but that's
+       dead weight now: the waveform draws nothing on touch anyway (no
+       analyser graph on mobile, see AUDIO_TOUCH in the audio engine), so
+       the strip was just an empty black bar taking up scroll space. */
 
     /* subtle "tap for sound" hint until first interaction */
     #sound-hint {
@@ -1780,6 +1779,10 @@
          scene in place of the baked video) — mobile GPUs shouldn't be
          asked to run it, so the control doesn't even show there. */
       #live-toggle { display: none; }
+      /* now-playing waveform strip — draws nothing on touch anyway (no
+         analyser graph there, see AUDIO_TOUCH), so it was just an empty
+         black bar taking up scroll space on phones. */
+      .now-playing { display: none; }
     }
     /* logo text doesn't scale down with the viewport (it's not part of the
        flex flow's width math — .nav-links is position:absolute and centers
