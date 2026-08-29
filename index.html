@@ -1169,6 +1169,26 @@
     .f-right a { transition: color var(--t-standard) var(--ease-out); }
     .f-right a:hover { color: var(--fg); }
 
+    /* cybernetics webring badge */
+    .f-ring {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: .7rem;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .f-ring a {
+      color: var(--muted);
+      text-decoration: none;
+      transition: color var(--t-standard) var(--ease-out);
+    }
+
+    .f-ring a:hover { color: var(--fg); }
+    .f-ring .f-ring-arrow { font-size: .8rem; line-height: 1; }
+
     /* ─── scroll-reveal utility ─── */
     .reveal-wrap { overflow: hidden; }
     .reveal-inner {
@@ -2207,6 +2227,11 @@
 <!-- ── footer ── -->
 <footer>
   <span class="f-left">All rights reserved © 2025 · Praneel Khiantani</span>
+  <nav class="f-ring" aria-label="Cybernetics Webring">
+    <a class="f-ring-arrow" href="https://cyb3r17.github.io/Cybernetics-Webring/?nav=prev&amp;from=https://praneelk.tech" aria-label="Previous site in the Cybernetics Webring">&#8592;</a>
+    <a href="https://cyb3r17.github.io/Cybernetics-Webring/">Cybernetics Webring</a>
+    <a class="f-ring-arrow" href="https://cyb3r17.github.io/Cybernetics-Webring/?nav=next&amp;from=https://praneelk.tech" aria-label="Next site in the Cybernetics Webring">&#8594;</a>
+  </nav>
   <div class="f-right">
     <a href="#work">Work</a>
     <a href="#about">About</a>
