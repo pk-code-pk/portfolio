@@ -19,11 +19,15 @@ node tools/serve.mjs ~/portfolio 8080
 
 # 2. bake (any subset of jobs; ~15-20 min for all four)
 cd tools
-caffeinate -i node bake.mjs flight-land gya-land flight-port gya-port
+caffeinate -i node bake.mjs idle-land idle-port   # what the site plays
+# legacy creature clips (no longer referenced by index.html):
+#   node bake.mjs flight-land gya-land flight-port gya-port
 ```
 
 Outputs land directly in `hero-video/` as `<clip>-<orient>.{mp4,hevc.mp4,webm}`.
-Frames go to `tools/work/` (gitignored, safe to delete).
+Frames go to `tools/work/` (gitignored) and are deleted after each job encodes
+(~1k PNGs at 2560x1440 per job, GBs). No GPU? It falls back to SwiftShader
+off macOS (`ANGLE=` overrides); `CHROME=/path/to/chrome` skips the bundled one.
 
 ## How it works — read before touching
 
@@ -38,7 +42,7 @@ Frames go to `tools/work/` (gitignored, safe to delete).
   match animation periods — gyarados's lap time (~9.2s real vs 8.0s nominal
   `PERIOD`, because `speedMul` eases through turns) and its undulation wave
   are incommensurate, and none of that matters with the crossfade.
-- **Durations** (18s flight / 24s gya) are what `index.html`'s player expects;
+- **Durations** (14s idle; legacy 18s flight / 24s gya) are what `index.html`'s player expects;
   change them freely, nothing hardcodes them player-side.
 - **Renditions**: h264 crf18 (universal) / HEVC crf21 10-bit `hvc1` tag
   (Safari/iOS — the tag is mandatory, Safari rejects the file without it) /
@@ -59,6 +63,7 @@ Frames go to `tools/work/` (gitignored, safe to delete).
 | `__capSwitchPokemon()` | rayquaza ⇄ gyarados (async GLB load — poll `__capState().pokemon`) |
 | `__capState()` | `{t, pokemon, rqS/rqL, gyaS/gyaL}` — head arc-distance + curve length per rig |
 | `__capRenderOnce()` | force one composer render |
+| `&poke=0` | no creature: model loads (camera framing uses its bounds) but stays invisible; switcher hidden. Also honored outside capture mode (the site's live-3D toggle) |
 | `&touch=1` | portrait/phone framing (camera dist 63 vs 55) |
 | `&dpr=N` | render scale; bake uses 2 → exact 1440×2560 / 2560×1440 |
 

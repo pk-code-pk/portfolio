@@ -368,6 +368,17 @@
         flight: q.get('flight') === '1',
       };
     })();
+    /* ?poke=0 — no creature: only the glass "pk" and the world around it.
+       The model still LOADS (camera framing is computed from its bone
+       bounds, see "camera locked"), it is just never visible, the
+       switcher is gone and clicks can't start its flight. Used by the
+       idle bake (capture mode) and the site's live-3D toggle alike. */
+    const NO_POKE = new URLSearchParams(location.search).get('poke') === '0';
+    if (NO_POKE) {
+      const st = document.createElement('style');
+      st.textContent = '#poke-toggle{display:none !important}';
+      document.head.appendChild(st);
+    }
     if (CAP) {
       window.__capT = 0;
       // bake ONLY the 3D scene: every DOM overlay (badge, music player,
@@ -1746,6 +1757,7 @@
         // creature is the subject and effectively always on screen, so
         // skipping the test costs nothing.
         model.traverse(o => { if (o.isMesh || o.isSkinnedMesh) o.frustumCulled = false; });
+        if (NO_POKE) model.visible = false;   // nothing ever sets it back
         window.__model = model;   // debug handle
         model.updateMatrixWorld(true);
 
@@ -2456,6 +2468,7 @@
       // Covers both callers: the button click below and the parent's
       // postMessage 'switchPokemon' action (see the message listener below).
       if (qgFrozen) return;
+      if (NO_POKE) return;   // ?poke=0: no creature to switch to/from
       const next = currentPokemon === 'rayquaza' ? 'greninja' : 'rayquaza';
       switching = true;
       if (pokeBtn) pokeBtn.disabled = true;
@@ -3834,7 +3847,8 @@
         if (window.__heroClick) {
           const c = window.__heroClick; window.__heroClick = null;
           raycaster.setFromCamera({ x: c.x, y: c.y }, camera);
-          const hits = raycaster.intersectObject(model, true);
+          // ?poke=0: the model is invisible, so it can't be clicked into flight
+          const hits = NO_POKE ? [] : raycaster.intersectObject(model, true);
           if (hits.length && t - _rqLastToggle > 0.5) {
             _rqLastToggle = t;
             rqLooping = !rqLooping;

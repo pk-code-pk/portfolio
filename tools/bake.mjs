@@ -9,8 +9,12 @@
    the animation's motions are periodic in the window. This is why lap
    arithmetic is not needed.
 
-   usage: node bake.mjs <job> [job...]    jobs: flight-land gya-land
+   usage: node bake.mjs <job> [job...]    jobs: idle-land idle-port
+                                                flight-land gya-land
                                                 flight-port gya-port
+   env:   CHROME=<path>  use this Chromium instead of puppeteer's bundled one
+          ANGLE=<backend> GL backend (default metal on macOS, swiftshader
+                          elsewhere; capture is deterministic either way)
 */
 import { mkdir, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -25,6 +29,10 @@ const OUTDIR = join(TOOLS, '..', 'hero-video');
 const FPS = 60;
 
 const JOBS = {
+  // the live hero: glass pk + world, no creature (scene ?poke=0). Only the
+  // ambient motion (caustics, stars, pk shimmer) moves; the xfade hides the seam.
+  'idle-land':   { w: 1280, h: 720,  touch: 0, mode: 'idle',   warm: 4, dur: 14, xf: 1.5 },
+  'idle-port':   { w: 720,  h: 1280, touch: 1, mode: 'idle',   warm: 4, dur: 14, xf: 1.5 },
   'flight-land': { w: 1280, h: 720,  touch: 0, mode: 'flight', warm: 4, dur: 18, xf: 1.5 },
   'gya-land':    { w: 1280, h: 720,  touch: 0, mode: 'gya',    warm: 3, dur: 24, xf: 1.5 },
   'flight-port': { w: 720,  h: 1280, touch: 1, mode: 'flight', warm: 4, dur: 18, xf: 1.5 },
@@ -43,7 +51,8 @@ async function capture(name, j) {
 
   const browser = await puppeteer.launch({
     headless: true,
-    args: ['--enable-gpu', '--use-angle=metal', '--enable-unsafe-swiftshader',
+    executablePath: process.env.CHROME || undefined,
+    args: ['--enable-gpu', `--use-angle=${process.env.ANGLE || (process.platform === 'darwin' ? 'metal' : 'swiftshader')}`, '--enable-unsafe-swiftshader',
       '--hide-scrollbars', '--mute-audio', '--no-sandbox', '--disable-dev-shm-usage',
       '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding'],
@@ -51,7 +60,7 @@ async function capture(name, j) {
   const page = await browser.newPage();
   await page.setViewport({ width: j.w, height: j.h, deviceScaleFactor: 2 });
   page.on('pageerror', e => console.log('  [pageerror]', e.message));
-  await page.goto(`http://localhost:8080/rayquaza-flying-clean.html?capture=1&dpr=2&touch=${j.touch}`,
+  await page.goto(`http://localhost:8080/rayquaza-flying-clean.html?capture=1&dpr=2&touch=${j.touch}${j.mode === 'idle' ? '&poke=0' : ''}`,
     { waitUntil: 'load', timeout: 120000 });
   await page.waitForFunction('window.__heroReady === true', { timeout: 180000 });
 
@@ -129,5 +138,6 @@ for (const name of process.argv.slice(2)) {
   console.log(`== ${name} ==`);
   const dir = await capture(name, j);
   await assemble(name, j, dir);
+  await rm(dir, { recursive: true, force: true });   // frames are GBs; free them per job
 }
 console.log('ALL JOBS DONE');
