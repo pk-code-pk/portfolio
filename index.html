@@ -825,7 +825,7 @@
     .work-item {
       border-top: 1px solid var(--border);
       display: grid;
-      grid-template-columns: 36px 1fr auto;
+      grid-template-columns: 36px 1fr auto auto;
       align-items: center;
       gap: clamp(16px, 3vw, 48px);
       padding: clamp(20px, 3vw, 32px) var(--pad);
@@ -902,6 +902,15 @@
     }
 
 
+    /* row affordance: small arrow so rows read as clickable */
+    .work-arrow {
+      width: 18px; height: 18px;
+      fill: none; stroke: var(--muted); stroke-width: 1.6;
+      stroke-linecap: round; stroke-linejoin: round;
+      position: relative; z-index: 1;
+      transition: transform var(--t-emphatic) var(--ease-out), stroke var(--t-standard) var(--ease-out);
+    }
+
     /* ─── work group partition (sub-header inside the work list) ─── */
     .work-group {
       border-top: 1px solid var(--border);
@@ -960,6 +969,8 @@
       .work-item:hover .work-year,
       .work-item:hover .work-cats,
       .work-item:hover .work-type { color: #000; }
+      .work-item:hover .work-arrow { stroke: #000; transform: translateX(4px); }
+      .work-item[style]:hover .work-arrow { stroke: #fff; }
       .work-item[style]:hover::before { opacity: 0; transition: opacity var(--t-standard) var(--ease-out); }
       .work-item[style]:hover .work-num,
       .work-item[style]:hover .work-name,
@@ -1437,8 +1448,7 @@
       }
     }
 
-    .case-media img,
-    .case-media video {
+    .case-media img {
       display: block;
       width: 100%;
       height: auto;
@@ -1771,6 +1781,8 @@
       text-shadow: none;
       animation: none;
     }
+    .work-item.is-focus .work-arrow { stroke: #000; transform: translateX(4px); }
+    .work-item[style].is-focus .work-arrow { stroke: #fff; }
     .work-item[style].is-focus::before { opacity: 0; transition: opacity var(--t-standard) var(--ease-out); }
 
     @media (max-width: 880px) {
@@ -1853,10 +1865,11 @@
 
       /* work list: show year + type inline since we can't rely on hover */
       .work-item {
-        grid-template-columns: 28px 1fr;
+        grid-template-columns: 28px 1fr auto;
         gap: 14px;
         padding: 22px var(--pad);
       }
+      .work-arrow { grid-row: 1; grid-column: 3; }
       .work-meta {
         grid-column: 2 / -1;
         flex-direction: row;
@@ -2104,6 +2117,7 @@
         <span class="work-year">2026</span>
         <span class="work-cats">agent platform · infra</span>
       </div>
+      <svg class="work-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
     </div>
 
     <div class="work-item js-work" data-slug="holecard" style="--accent: #1A8CFF">
@@ -2115,6 +2129,7 @@
         <span class="work-year">2026</span>
         <span class="work-cats">agents · computer use</span>
       </div>
+      <svg class="work-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
     </div>
 
     <div class="work-item js-work" data-slug="tlc" style="--accent: #16803C">
@@ -2126,6 +2141,7 @@
         <span class="work-year">2025</span>
         <span class="work-cats">ai · full-stack</span>
       </div>
+      <svg class="work-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
     </div>
 
     <div class="work-item js-work" data-slug="indeed" style="--accent: #2164F3">
@@ -2137,6 +2153,7 @@
         <span class="work-year">2025</span>
         <span class="work-cats">ai · graph systems</span>
       </div>
+      <svg class="work-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
     </div>
 
     <div class="work-group" data-group="projects">
@@ -2153,6 +2170,7 @@
         <span class="work-year">2025</span>
         <span class="work-cats">transit · routing</span>
       </div>
+      <svg class="work-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
     </div>
 
     <div class="work-group" data-group="research">
@@ -2169,6 +2187,7 @@
         <span class="work-year">2026</span>
         <span class="work-cats">multi-agent rl · paper</span>
       </div>
+      <svg class="work-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
     </div>
 
   </div>
@@ -2683,7 +2702,7 @@
       ],
       images: [
         { src: 'holecard/landing.webp',                                                     alt: 'holecard landing page',                         caption: 'holecard.me · landing'        },
-        { src: 'holecard/apply.mp4',       poster: 'holecard/apply-poster.jpg', alt: 'agent filling a greenhouse application' },
+        { src: 'holecard/apply.webp',      alt: 'agent filling a greenhouse application' },
         { src: 'holecard/dashboard.webp',  layout: 'half',                                  alt: 'applications dashboard',                        caption: 'dashboard · all applications'  },
         { src: 'holecard/review.webp',     layout: 'half',                                  alt: 'application held for review before sending',   caption: 'review · approve and send'     },
         { src: 'holecard/onboarding.webp', layout: 'half',                                  alt: 'onboarding step, home address',                 caption: 'onboarding'                    },
@@ -2798,7 +2817,7 @@
       ],
       images: [
         { src: 'rware/results.webp',      layout: 'wide',                                  alt: 'evaluation return under targeted dropout: no comm, learned comm, intent-grounded comm' },
-        { src: 'rware/demo.mp4',          layout: 'tall', poster: 'rware/demo-poster.jpg', alt: 'trained agents in rware with one agent dropping out mid-episode' },
+        { src: 'rware/demo.webp',         layout: 'tall', alt: 'trained agents in rware with one agent dropping out mid-episode' },
         { src: 'rware/term-dropout.webp',                                                               alt: 'terminal: per-step rollout trace around the dropout moment',                             caption: 'rollout · the dropout moment'          },
         { src: 'rware/term-train.webp',                                                                 alt: 'terminal: MAPPO training run on rware',                                                  caption: 'training · mappo on rware'             },
         { src: 'rware/paper-title.webp',  layout: 'half',                                  alt: 'paper title page and abstract' },
@@ -2980,11 +2999,6 @@
       if (!img.src) return '';
       const layoutClass = img.layout ? ` is-${img.layout}` : '';
       const cap = img.caption ? `<figcaption>${img.caption}</figcaption>` : '';
-      // .mp4 entries render as a muted looping clip; poster shows until it plays.
-      if (/\.mp4$/i.test(img.src)) {
-        const poster = img.poster ? ` poster="${img.poster}"` : '';
-        return `<figure class="case-media-item${layoutClass}"><video src="${img.src}"${poster} aria-label="${img.alt || ''}" muted loop autoplay playsinline preload="metadata"></video>${cap}</figure>`;
-      }
       return `<figure class="case-media-item${layoutClass}"><img src="${img.src}" alt="${img.alt || ''}" loading="lazy" />${cap}</figure>`;
     }).join('');
 
