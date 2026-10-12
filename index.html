@@ -1437,7 +1437,8 @@
       }
     }
 
-    .case-media img {
+    .case-media img,
+    .case-media video {
       display: block;
       width: 100%;
       height: auto;
@@ -1457,6 +1458,11 @@
       color: rgba(255,255,255,0.68);
       text-shadow: 0 1px 6px rgba(0,0,0,0.85);
       pointer-events: none;
+    }
+    /* light screenshots: flip the caption so it stays legible */
+    .case-media figure.is-light figcaption {
+      color: rgba(0,0,0,0.62);
+      text-shadow: 0 1px 6px rgba(255,255,255,0.9);
     }
 
     .case-tags {
@@ -2090,7 +2096,7 @@
 <section class="work" id="work">
   <div class="work-head">
     <span class="section-label">Work</span>
-    <span class="section-label">(3)</span>
+    <span class="section-label">(4)</span>
   </div>
 
   <div class="work-list">
@@ -2106,9 +2112,20 @@
       </div>
     </div>
 
-    <div class="work-item js-work" data-slug="tlc" style="--accent: #16803C">
+    <div class="work-item js-work" data-slug="holecard" style="--accent: #1A8CFF">
       <div class="work-overlay"></div>
       <span class="work-num">02</span>
+      <span class="work-name">holecard</span>
+      <div class="work-meta">
+        <span class="work-type" data-type="founder">[ founder ]</span>
+        <span class="work-year">2026</span>
+        <span class="work-cats">agents · computer use</span>
+      </div>
+    </div>
+
+    <div class="work-item js-work" data-slug="tlc" style="--accent: #16803C">
+      <div class="work-overlay"></div>
+      <span class="work-num">03</span>
       <span class="work-name">the learning company</span>
       <div class="work-meta">
         <span class="work-type" data-type="founder">[ founder ]</span>
@@ -2119,7 +2136,7 @@
 
     <div class="work-item js-work" data-slug="indeed" style="--accent: #2164F3">
       <div class="work-overlay"></div>
-      <span class="work-num">03</span>
+      <span class="work-num">04</span>
       <span class="work-name">indeed</span>
       <div class="work-meta">
         <span class="work-type" data-type="internship">[ internship ]</span>
@@ -2135,12 +2152,28 @@
 
     <div class="work-item js-work" data-slug="shuttl" style="--accent: #DC143C">
       <div class="work-overlay"></div>
-      <span class="work-num">04</span>
+      <span class="work-num">05</span>
       <span class="work-name">shuttl</span>
       <div class="work-meta">
         <span class="work-type" data-type="project">[ project ]</span>
         <span class="work-year">2025</span>
         <span class="work-cats">transit · routing</span>
+      </div>
+    </div>
+
+    <div class="work-group" data-group="research">
+      <span class="work-group-label">research</span>
+      <span class="work-group-label">(1)</span>
+    </div>
+
+    <div class="work-item js-work" data-slug="rware" style="--accent: #2CA02C">
+      <div class="work-overlay"></div>
+      <span class="work-num">06</span>
+      <span class="work-name">rware</span>
+      <div class="work-meta">
+        <span class="work-type" data-type="research">[ research ]</span>
+        <span class="work-year">2026</span>
+        <span class="work-cats">multi-agent rl · paper</span>
       </div>
     </div>
 
@@ -2642,6 +2675,36 @@
       corner: 'JNT · 26'
     },
 
+    'holecard': {
+      title: 'holecard',
+      year: '2026',
+      type: 'founder',
+      accent: '#1A8CFF',
+      lede: 'Agents that fill and submit real job applications on any board. Paste a link, approve, done.',
+      body: [
+        "Applying to jobs is the same form a hundred times. Workday, Greenhouse, Ashby, Lever: every board asks for your name, your address, your work history, your resume, and then a few open-ended questions, each in a slightly different widget. I built holecard so nobody has to do that by hand.",
+        "You upload your resume once and answer a short onboarding. From then on you paste a job link. Cloud browser agents open the application, complete every field, upload your resume, and write the open-ended answers from your actual history. A vision model reads the page and drives a real browser with OS-level input, so it handles widgets no selector-based filler can.",
+        "Trust is the product, so nothing sends on faith. Before submit, every application passes checks: every required field filled, the resume uploaded and read back, no answer outside your profile. You choose whether it submits on its own or stops at the last step for your approval. Employers that email a verification code or link get handled through a private forwarding address, so applications finish without asking you, and your own email stays on every application.",
+        'Every finished application keeps a record of exactly what was submitted, field by field. 100 applications for $50, no subscription. Live at <a href="https://holecard.me" target="_blank" rel="noopener noreferrer">holecard.me</a>.'
+      ],
+      images: [
+        { src: 'holecard/landing.webp',    layout: 'hero',  alt: 'holecard landing page',                         caption: 'holecard.me · landing'       },
+        { src: 'holecard/apply.mp4',       light: true,  poster: 'holecard/apply-poster.jpg', alt: 'agent filling a greenhouse application', caption: 'live agent · greenhouse apply' },
+        { src: 'holecard/dashboard.webp',  layout: 'wide',  alt: 'applications dashboard',                        caption: 'dashboard · all applications' },
+        { src: 'holecard/onboarding.webp', layout: 'tall',  alt: 'onboarding step, home address',                 caption: 'onboarding'                  },
+        { src: 'holecard/record.webp',     layout: 'half',  alt: 'submitted application record, field by field', caption: 'record · what was sent'      },
+        { src: 'holecard/forwarding.webp', layout: 'half',  alt: 'email forwarding setup',                        caption: 'forwarding · codes and links' }
+      ],
+      tags: ['Python', 'Next.js', 'TypeScript', 'Supabase', 'Chromium', 'Vision models', 'Docker', 'Azure'],
+      meta: {
+        role: 'Founder',
+        timeline: 'Sept 2026 to present',
+        boards: 'Workday · Greenhouse · Ashby',
+        pricing: '100 apps · $50'
+      },
+      corner: 'HLC · 26'
+    },
+
     'tlc': {
       title: 'the learning company',
       year: '2025',
@@ -2725,6 +2788,37 @@
         users: '1,000+ active'
       },
       corner: 'SHT · 25'
+    },
+
+    'rware': {
+      title: 'rware',
+      year: '2026',
+      type: 'research',
+      accent: '#2CA02C',
+      lede: 'Can robots that talk to each other cope when a teammate dies? Only if their messages mean something.',
+      body: [
+        "Distributed systems use heartbeats to tell whether a node is alive. A missing heartbeat means the node crashed, or the network is slow, and you can't tell which. Sam Chen and I asked what that ambiguity does to cooperative agents. In our setup, agents receive delayed heartbeats from teammates, and one agent can permanently drop out mid-episode. Heartbeats already in flight still arrive after it dies, so survivors face a window where they can't distinguish dead from slow.",
+        "We built the infrastructure on top of the Robotic Warehouse (RWARE) environment: configurable heartbeat delay, dropout schedules, and a discrete communication channel. Then we extended Multi-Agent PPO with a RIAL-style learned message head (Comm-MAPPO) to test whether communication rescues performance under dropout.",
+        "It didn't. Message entropy stayed at 77 to 87% of uniform random. The channel never learned meaningful tokens, and the hypothesized dropout rescue was null across every environment. So we added GComm-MAPPO: a cross-entropy auxiliary loss that grounds each message to task intent. Under targeted request-intent dropout it significantly beat both the no-communication and ungrounded baselines (p &lt; 0.01, Cohen's d<sub>z</sub> &gt; 1.3).",
+        'The finding: message grounding, not channel capacity, is the binding constraint for communication-aided dropout robustness. Read the <a href="rware/paper.pdf" target="_blank" rel="noopener noreferrer">full paper (PDF)</a> or the <a href="https://github.com/pk-code-pk/CS2860-Project" target="_blank" rel="noopener noreferrer">code</a>.'
+      ],
+      images: [
+        { src: 'rware/results.webp', layout: 'wide', light: true, alt: 'evaluation return under targeted dropout: no comm, learned comm, intent-grounded comm', caption: 'targeted dropout · grounded comm wins' },
+        { src: 'rware/demo.mp4',     layout: 'tall', light: true, poster: 'rware/demo-poster.jpg', alt: 'trained agents in rware with one agent dropping out mid-episode', caption: 'rware tiny-4ag · agent 0 drops' },
+        { src: 'rware/term-train.webp',                           alt: 'terminal: MAPPO training run on rware',                                 caption: 'training · mappo on rware'      },
+        { src: 'rware/term-dropout.webp',                         alt: 'terminal: per-step rollout trace around the dropout moment',                caption: 'rollout · the dropout moment'   },
+        { src: 'rware/paper-title.webp',  layout: 'half', light: true, alt: 'paper title page and abstract',                                        caption: 'paper · abstract'               },
+        { src: 'rware/paper-fig1.webp',   layout: 'half', light: true, alt: 'fig 1: training and evaluation curves for comm-mappo',                 caption: 'fig 1 · comm-mappo curves'      },
+        { src: 'rware/paper-table5.webp',                 light: true, alt: 'table v and fig 5: gcomm-mappo results under targeted dropout',       caption: 'table v · fig 5 · gcomm-mappo'  }
+      ],
+      tags: ['Python', 'PyTorch', 'MAPPO', 'RIAL', 'RWARE', 'uv'],
+      meta: {
+        role: 'Co-author · with Sam Chen',
+        timeline: 'Spring 2026',
+        course: 'CS 2860 · Harvard',
+        result: 'p &lt; 0.01 · d<sub>z</sub> &gt; 1.3'
+      },
+      corner: 'RWR · 26'
     }
   };
 
@@ -2890,8 +2984,13 @@
     document.getElementById('case-media').innerHTML = media.map(item => {
       const img = (typeof item === 'string') ? { src: item } : (item || {});
       if (!img.src) return '';
-      const layoutClass = img.layout ? ` is-${img.layout}` : '';
+      const layoutClass = (img.layout ? ` is-${img.layout}` : '') + (img.light ? ' is-light' : '');
       const cap = img.caption ? `<figcaption>${img.caption}</figcaption>` : '';
+      // .mp4 entries render as a muted looping clip; poster shows until it plays.
+      if (/\.mp4$/i.test(img.src)) {
+        const poster = img.poster ? ` poster="${img.poster}"` : '';
+        return `<figure class="case-media-item${layoutClass}"><video src="${img.src}"${poster} aria-label="${img.alt || ''}" muted loop autoplay playsinline preload="metadata"></video>${cap}</figure>`;
+      }
       return `<figure class="case-media-item${layoutClass}"><img src="${img.src}" alt="${img.alt || ''}" loading="lazy" />${cap}</figure>`;
     }).join('');
 
@@ -3325,7 +3424,9 @@
       'janet-ai': { scale: 1.4,  digit: 1.15, gridX: 2.0, gridY: 1.0, scan: 0.50, flicker: 1.10, glitch: 1.00, noise: 1.05, bright: 1.95, speed: 0.46 },
       'tlc':      { scale: 1.6,  digit: 1.25, gridX: 2.2, gridY: 1.1, scan: 0.70, flicker: 0.75, glitch: 0.95, noise: 1.10, bright: 1.85, speed: 0.38 },
       'indeed':   { scale: 1.45, digit: 1.10, gridX: 2.4, gridY: 1.0, scan: 0.55, flicker: 0.90, glitch: 1.10, noise: 0.95, bright: 1.90, speed: 0.50 },
-      'shuttl':   { scale: 1.7,  digit: 1.35, gridX: 1.8, gridY: 1.2, scan: 0.45, flicker: 1.20, glitch: 1.20, noise: 1.20, bright: 1.80, speed: 0.55 }
+      'shuttl':   { scale: 1.7,  digit: 1.35, gridX: 1.8, gridY: 1.2, scan: 0.45, flicker: 1.20, glitch: 1.20, noise: 1.20, bright: 1.80, speed: 0.55 },
+      'holecard': { scale: 1.5,  digit: 1.15, gridX: 2.2, gridY: 1.0, scan: 0.50, flicker: 1.00, glitch: 1.10, noise: 1.00, bright: 1.85, speed: 0.50 },
+      'rware':    { scale: 1.6,  digit: 1.25, gridX: 2.0, gridY: 1.1, scan: 0.50, flicker: 1.10, glitch: 1.15, noise: 1.10, bright: 1.80, speed: 0.55 }
     };
     const DEFAULTS = { scale: 1.5, digit: 1.2, gridX: 2.0, gridY: 1.0, scan: 0.6, flicker: 0.9, glitch: 1.0, noise: 1.0, bright: 1.85, speed: 0.42 };
 
