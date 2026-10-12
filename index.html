@@ -381,25 +381,58 @@
     }
     /* tagline under the scene's "pk" letters, whose bottom edge lands near
        65% of the hero in the baked clips. .hero-3d prefix: outranks the
-       generic `.hero > * { position: relative }` rule further down. */
+       generic `.hero > * { position: relative }` rule further down.
+       Glass treatment to sit with the pk: the fill is a frosted gradient
+       clipped to the glyphs, a slow specular band sweeps across it, and
+       drop-shadow (which follows clipped text, unlike text-shadow) gives
+       the cool edge glow. Keywords take the site's blue in the same glass. */
     .hero-3d .hero-pk-tag {
       position: absolute;
       left: 50%;
       top: 68%;
       transform: translateX(-50%);
-      width: min(560px, calc(100% - 2 * var(--pad, 24px)));
+      width: min(600px, calc(100% - 2 * var(--pad, 24px)));
       margin: 0;
       text-align: center;
-      font-size: clamp(.74rem, 1vw, .88rem);
-      line-height: 1.6;
-      letter-spacing: .01em;
-      color: rgba(255,255,255,0.72);
-      text-shadow: 0 1px 12px rgba(0,0,0,0.6);
+      text-wrap: balance;
+      font-family: 'Hanken Grotesk', sans-serif;
+      font-weight: 500;
+      font-size: clamp(.8rem, 1.05vw, .95rem);
+      line-height: 1.65;
+      letter-spacing: .005em;
+      color: rgba(225,235,255,.8);
+      filter: drop-shadow(0 1px 0 rgba(255,255,255,.14)) drop-shadow(0 0 10px rgba(110,160,255,.28));
       pointer-events: none;
       z-index: 2;
     }
+    /* inline + clone: every line gets its own top-lit glass gradient */
+    .hero-3d .hero-pk-tag > span {
+      background:
+        linear-gradient(105deg, transparent 38%, rgba(255,255,255,.95) 48%, transparent 58%) 0 0 / 260% 100% no-repeat,
+        linear-gradient(180deg, #ffffff 0%, rgba(196,212,238,.78) 55%, rgba(240,245,255,.9) 100%);
+      -webkit-box-decoration-break: clone;
+      box-decoration-break: clone;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: pk-tag-sheen 7s ease-in-out infinite;
+    }
+    .hero-3d .hero-pk-tag b {
+      font-weight: 600;
+      background: linear-gradient(180deg, #e8f6ff 0%, #8fd0ff 45%, #2f8dff 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    @keyframes pk-tag-sheen {
+      0%, 30%   { background-position: 130% 0, 0 0; }
+      70%, 100% { background-position: -30% 0, 0 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .hero-3d .hero-pk-tag > span { animation: none; }
+    }
     @media (max-width: 640px) {
-      .hero-3d .hero-pk-tag { top: 66%; font-size: .78rem; line-height: 1.55; }
+      .hero-3d .hero-pk-tag { top: 66%; font-size: .8rem; line-height: 1.6; }
     }
     /* the live scene crossfades over the poster once it signals ready */
     .hero-3d .hero-frame { opacity: 0; transition: opacity .55s ease; }
@@ -2036,7 +2069,7 @@
     allow="autoplay; fullscreen"
     loading="eager"
     frameborder="0"></iframe>
-  <p class="hero-pk-tag">i’m praneel. i study cs at harvard and work across design and engineering: ui/ux, agent infrastructure, computer-use automation, and full-stack ai products. i’ve interned at janet.ai and indeed, built and sold an app, and run a product with paying users on the side.</p>
+  <p class="hero-pk-tag"><span>i’m praneel. i study cs at <b>harvard</b> and work across <b>design&nbsp;and&nbsp;engineering</b>: ui/ux, agent infrastructure, computer-use automation, and full-stack ai products. i’ve interned at <b>janet.ai</b> and <b>indeed</b>, built and <b>sold&nbsp;an&nbsp;app</b>, and run a product with <b>paying&nbsp;users</b> on the side.</span></p>
 </section>
 
 <!-- music player (parent-owned; drives the audio + feeds amplitude to the hero iframe) -->
