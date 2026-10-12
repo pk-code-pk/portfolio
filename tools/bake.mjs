@@ -3,6 +3,11 @@
    - bundled puppeteer, headless (proven working on this box today)
    - deterministic stepping via __capPause handshake instead of double-rAF
 
+   Frames are never written to disk: each screenshot streams into ffmpeg,
+   which writes ONE near-lossless intermediate per job (x264 4:4:4 10-bit
+   crf 6). The loop assembly + final encodes read that, then it's deleted.
+   A free-space guard aborts under MIN_FREE (the bake box can be tight).
+
    Loop trick: capture dur+xf seconds, then assemble the final clip as
    xfade(tail, head, xf) + middle. The <video loop> wrap point lands on
    blended frames, so the seam is invisible REGARDLESS of whether any of
@@ -16,7 +21,7 @@
           ANGLE=<backend> GL backend (default metal on macOS, swiftshader
                           elsewhere; capture is deterministic either way)
 */
-import { mkdir, rm } from 'node:fs/promises';
+import { access, mkdir, rm, statfs } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { cpus } from 'node:os';
 import puppeteer from 'puppeteer';
@@ -24,9 +29,29 @@ import puppeteer from 'puppeteer';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 const TOOLS = dirname(fileURLToPath(import.meta.url));
-const SCRATCH = join(TOOLS, 'work');          // frames land here; gitignored
+const SCRATCH = join(TOOLS, 'work');          // intermediates land here; gitignored
 const OUTDIR = join(TOOLS, '..', 'hero-video');
 const FPS = 60;
+const MIN_FREE = 300 * 1024 * 1024;           // pause below this much free disk
+// TEST=<seconds>: capture only that much of the first job into work/ and stop
+// (per-frame timing check; no assembly, outputs untouched)
+const TEST_S = parseFloat(process.env.TEST || '0');
+
+// low disk (often something else on the box): wait for it to recover,
+// polling every 15s for up to 10 min, then give up. Pausing mid-capture is
+// safe, the scene's clock only moves when we step it.
+async function checkDisk(where) {
+  const free = async () => { const st = await statfs(TOOLS); return st.bavail * st.bsize; };
+  const deadline = Date.now() + 10 * 60 * 1000;
+  let f = await free();
+  while (f < MIN_FREE) {
+    if (Date.now() > deadline) throw new Error(`disk guard (${where}): only ${(f / 2 ** 20).toFixed(0)}MB free after 10 min`);
+    console.log(`  disk guard (${where}): ${(f / 2 ** 20).toFixed(0)}MB free, waiting…`);
+    await new Promise(r => setTimeout(r, 15000));
+    f = await free();
+  }
+  return f;
+}
 
 const JOBS = {
   // the live hero: glass pk + world, no creature (scene ?poke=0). Only the
@@ -40,14 +65,15 @@ const JOBS = {
 };
 
 const run = (cmd, args) => new Promise((res, rej) => {
+  if (cmd === 'ffmpeg') args = ['-hide_banner', '-loglevel', 'warning', '-stats', ...args];
   const p = spawn(cmd, args, { stdio: ['ignore', 'inherit', 'inherit'] });
   p.on('exit', c => c === 0 ? res() : rej(new Error(cmd + ' exit ' + c)));
 });
 
 async function capture(name, j) {
-  const dir = `${SCRATCH}/frames/${name}`;
-  await rm(dir, { recursive: true, force: true });
-  await mkdir(dir, { recursive: true });
+  await mkdir(SCRATCH, { recursive: true });
+  const inter = `${SCRATCH}/${name}.inter.mp4`;
+  await rm(inter, { force: true });
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -86,34 +112,57 @@ async function capture(name, j) {
   // walk the clock through warm-up so dt-integrating rigs settle
   for (let t = 0; t <= j.warm; t += 1 / FPS) await step(t);
 
-  const N = Math.round((j.dur + j.xf) * FPS);
+  // PNG frames stream straight into the intermediate encode (stdin)
+  const enc = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-c:v', 'png',
+    '-framerate', String(FPS), '-i', '-',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '6', '-pix_fmt', 'yuv444p10le',
+    '-profile:v', 'high444', inter], { stdio: ['pipe', 'inherit', 'inherit'] });
+  const encDone = new Promise((res, rej) => enc.on('exit', c => c === 0 ? res() : rej(new Error('ffmpeg intermediate exit ' + c))));
+  let encErr = null;
+  enc.stdin.on('error', (e) => { encErr = e; });
+  const write = (buf) => new Promise((res, rej) => {
+    if (encErr) return rej(encErr);
+    if (enc.stdin.write(buf)) res(); else enc.stdin.once('drain', res);
+  });
+
+  const N = Math.round((TEST_S || (j.dur + j.xf)) * FPS);
   const t0 = Date.now();
-  for (let i = 0; i < N; i++) {
-    await step(j.warm + i / FPS);
-    await page.screenshot({ path: `${dir}/f${String(i).padStart(5, '0')}.png`, optimizeForSpeed: true });
-    if (i % 150 === 0) {
-      const rate = (i + 1) / ((Date.now() - t0) / 1000);
-      console.log(`  ${name}: frame ${i}/${N}  (${rate.toFixed(1)} fps, eta ${((N - i) / rate / 60).toFixed(1)}m)`);
+  try {
+    for (let i = 0; i < N; i++) {
+      await step(j.warm + i / FPS);
+      await write(await page.screenshot({ type: 'png', optimizeForSpeed: true }));
+      if (i % 150 === 0 || (TEST_S && i % 30 === 0)) {
+        const free = await checkDisk(`${name} frame ${i}`);
+        const rate = (i + 1) / ((Date.now() - t0) / 1000);
+        console.log(`  ${name}: frame ${i}/${N}  (${(1000 / rate).toFixed(0)} ms/frame, eta ${((N - i) / rate / 60).toFixed(1)}m, ${(free / 2 ** 30).toFixed(2)}GB free)`);
+      }
     }
+  } finally {
+    enc.stdin.end();
+    await browser.close();
   }
-  await browser.close();
-  return dir;
+  await encDone;
+  console.log(`  ${name}: captured ${N} frames in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+  return inter;
 }
 
-async function assemble(name, j, dir) {
+async function assemble(name, j, inter) {
   const durF = j.dur * FPS, xfF = j.xf * FPS;
   // loop = xfade(tail, head, xf) + middle. Playback loop point lands on
-  // blended frames, so the wrap is invisible.
+  // blended frames, so the wrap is invisible. Each segment is its own
+  // input seeked into the intermediate (accurate seek; -0.5 frame so the
+  // first kept frame is exactly the wanted one) so nothing gets buffered.
   const fc =
-    `[0:v]trim=end_frame=${xfF},setpts=PTS-STARTPTS[b];` +
-    `[1:v]trim=end_frame=${xfF},setpts=PTS-STARTPTS[a];` +
+    `[0:v]trim=end_frame=${xfF},setpts=PTS-STARTPTS,fps=${FPS}[b];` +
+    `[1:v]trim=end_frame=${xfF},setpts=PTS-STARTPTS,fps=${FPS}[a];` +
     `[b][a]xfade=transition=fade:duration=${j.xf}:offset=0[x];` +
-    `[2:v]trim=end_frame=${durF - xfF},setpts=PTS-STARTPTS[m];` +
+    `[2:v]trim=end_frame=${durF - xfF},setpts=PTS-STARTPTS,fps=${FPS}[m];` +
     `[x][m]concat=n=2:v=1[out]`;
+  const at = (f) => String(Math.max(0, (f - 0.5) / FPS));
   const inputs = [
-    '-framerate', String(FPS), '-start_number', String(durF), '-i', `${dir}/f%05d.png`,
-    '-framerate', String(FPS), '-start_number', '0',          '-i', `${dir}/f%05d.png`,
-    '-framerate', String(FPS), '-start_number', String(xfF),  '-i', `${dir}/f%05d.png`,
+    '-ss', at(durF), '-i', inter,
+    '-i', inter,
+    '-ss', at(xfF),  '-i', inter,
   ];
   const T = String(Math.min(16, cpus().length));
   console.log(`  ${name}: encoding h264…`);
@@ -136,8 +185,13 @@ for (const name of process.argv.slice(2)) {
   const j = JOBS[name];
   if (!j) { console.log('unknown job', name); continue; }
   console.log(`== ${name} ==`);
-  const dir = await capture(name, j);
-  await assemble(name, j, dir);
-  await rm(dir, { recursive: true, force: true });   // frames are GBs; free them per job
+  await checkDisk(`before ${name}`);
+  // REUSE=1: re-run assembly/encodes from an intermediate left in work/
+  const kept = `${SCRATCH}/${name}.inter.mp4`;
+  const inter = process.env.REUSE && await access(kept).then(() => true, () => false)
+    ? kept : await capture(name, j);
+  if (TEST_S) { console.log(`TEST capture kept at ${inter}`); break; }
+  await assemble(name, j, inter);
+  await rm(inter, { force: true });   // intermediates are big; free per job
 }
 console.log('ALL JOBS DONE');

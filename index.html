@@ -31,8 +31,8 @@
                    letter-spacing:.06em; color:rgba(255,255,255,.18); }
     .hero.hero-3d { position:relative; width:100%; height:100svh; min-height:100svh;
                overflow:hidden;
-               background:#000 url('hero-poster.webp?v=2') center center / cover no-repeat; }
-    @media (max-width:640px){ .hero.hero-3d { background-image:url('hero-poster-mobile.webp?v=2'); } }
+               background:#000 url('hero-poster.webp?v=3') center center / cover no-repeat; }
+    @media (max-width:640px){ .hero.hero-3d { background-image:url('hero-poster-mobile.webp?v=3'); } }
     .hero-3d .hero-frame { position:absolute; inset:0; width:100%; height:100%;
                            border:0; display:block; opacity:0;
                            transition:opacity .55s ease; }
@@ -100,8 +100,8 @@
        long before the 700KB three.js bundle + 480KB model can arrive, so the
        hero LOOKS right immediately on slow connections (and stays right if
        WebGL never initialises at all). -->
-  <link rel="preload" as="image" href="hero-poster.webp?v=2" media="(min-width: 641px)">
-  <link rel="preload" as="image" href="hero-poster-mobile.webp?v=2" media="(max-width: 640px)">
+  <link rel="preload" as="image" href="hero-poster.webp?v=3" media="(min-width: 641px)">
+  <link rel="preload" as="image" href="hero-poster-mobile.webp?v=3" media="(max-width: 640px)">
 
   <style>
     @property --glow-col {
@@ -372,10 +372,10 @@
       height: 100svh;
       min-height: 100svh;
       overflow: hidden;
-      background: #000 url('hero-poster.webp?v=2') center center / cover no-repeat;
+      background: #000 url('hero-poster.webp?v=3') center center / cover no-repeat;
     }
     @media (max-width: 640px) {
-      .hero.hero-3d { background-image: url('hero-poster-mobile.webp?v=2'); }
+      .hero.hero-3d { background-image: url('hero-poster-mobile.webp?v=3'); }
     }
     /* tagline under the scene's "pk" letters, whose bottom edge lands near
        65% of the hero in the baked clips. .hero-3d prefix: outranks the

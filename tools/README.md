@@ -25,9 +25,14 @@ caffeinate -i node bake.mjs idle-land idle-port   # what the site plays
 ```
 
 Outputs land directly in `hero-video/` as `<clip>-<orient>.{mp4,hevc.mp4,webm}`.
-Frames go to `tools/work/` (gitignored) and are deleted after each job encodes
-(~1k PNGs at 2560x1440 per job, GBs). No GPU? It falls back to SwiftShader
-off macOS (`ANGLE=` overrides); `CHROME=/path/to/chrome` skips the bundled one.
+No frames touch disk: screenshots stream into ffmpeg, which writes one
+near-lossless intermediate per job to `tools/work/` (gitignored; x264 4:4:4
+10-bit crf 6, a few MB for the idle clip). The loop assembly and the three
+finals read it, then it is deleted. A guard pauses under 300MB free (retries 10 min).
+`TEST=2 node bake.mjs idle-land` captures 2s only (timing check, no outputs).
+`CHROME=/path/to/chrome` skips the bundled browser. Bake on a machine with a
+GPU (the Mac: ~190ms/frame headless); software GL (SwiftShader, the default
+`ANGLE` off macOS) works but takes hours per clip.
 
 ## How it works — read before touching
 
