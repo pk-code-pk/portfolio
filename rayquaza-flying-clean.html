@@ -405,8 +405,19 @@
     // behind. Neither is the common case — most visits never touch either.
     // capture: caller-chosen supersample, unclamped — the frame is being
     // encoded once offline, not held at 60fps on a phone.
+    // LITE (touch, ?lite=1, set by the page when the live scene is the
+    // DEFAULT hero rather than an opt-in): start a phone where the governor
+    // would usually end up anyway, instead of spending the first seconds of
+    // the visit at max cost and stepping down. DPR 2 (vs native 3: ~2.25x
+    // fewer pixels), no MSAA (DPR 2 already supersamples the edges), 30fps,
+    // transmission buffer at 0.6. The ladder still runs on top of this.
+    const HERO_Q = new URLSearchParams(location.search);
+    const LITE = !CAP && TOUCH_DEVICE && HERO_Q.get('lite') === '1';
+    // ?poke=0: no creature. The model still loads (camera framing is
+    // computed from its bounds) but never renders.
+    const NO_POKE = !CAP && HERO_Q.get('poke') === '0';
     const DPR_CAP = CAP ? CAP.dpr : (TOUCH_DEVICE
-      ? (window.devicePixelRatio || 2)
+      ? (LITE ? Math.min(window.devicePixelRatio || 2, 2) : (window.devicePixelRatio || 2))
       : Math.min((window.devicePixelRatio || 1) * 1.4, 2.8));
     // antialias:false — EffectComposer renders to its own MSAA render targets;
     // the renderer's native AA applies only to the default framebuffer which
@@ -434,7 +445,7 @@
     //   touch:   0.7 × DPR3 (native, the common phone case) = 2.1
     // capture always pays full price for the transmission buffer — the
     // 0.7 trim protects a phone's frame budget; the bake has none.
-    renderer.transmissionResolutionScale = (CAP || !TOUCH_DEVICE) ? 1.0 : 0.7;
+    renderer.transmissionResolutionScale = (CAP || !TOUCH_DEVICE) ? 1.0 : (LITE ? 0.6 : 0.7);
     // NOTE: the adaptive quality governor (see the big comment block near
     // the resize handler, below) is allowed to lower this further on a
     // device that can't hold frame budget (desktop T3, touch T4 — the
@@ -1253,7 +1264,7 @@
     // fins / letter edges are exactly the sub-pixel geometry that 2x leaves
     // ragged. If a weak phone struggles, the adaptive valve below trims the
     // transmission buffer rather than giving these edges back.
-    const MSAA = 4;
+    const MSAA = LITE ? 0 : 4;
     composer.renderTarget1.samples = MSAA;
     composer.renderTarget2.samples = MSAA;
     composer.renderTarget1.texture.type = THREE.HalfFloatType;
@@ -1726,6 +1737,7 @@
     new GLTFLoader().load('rayquaza/rayquaza.glb',
       (gltf) => {
         model = gltf.scene;
+        if (NO_POKE) model.visible = false;
 
         // do NOT transform the wrapper group — SkinnedMesh wraps its skin
         // matrices around the parent's transform at load time, and we end
@@ -2730,7 +2742,7 @@
                                           // since the snow-thin step lands on
                                           // a different tier per device class
                                           // (desktop T1, touch T2).
-    let _qgFrameMin      = TOUCH_DEVICE ? (1000 / 60) : 0;
+    let _qgFrameMin      = TOUCH_DEVICE ? (1000 / (LITE ? 30 : 60)) : 0;
                                           // touch: render-rate cap read by
                                           // tick()'s frame gate (below).
                                           // Starts at 60fps and is only ever
@@ -2793,7 +2805,8 @@
     // cost — the same "spend budget where it's seen" reasoning as
     // restoring native DPR above.
     function applyFpsCap(fps) {
-      _qgFrameMin = 1000 / fps;
+      // only ever lowers the rate: LITE starts at 30, so T1's 45 is a no-op
+      _qgFrameMin = Math.max(_qgFrameMin, 1000 / fps);
       log('quality: render-rate cap → ' + fps + 'fps');
     }
 

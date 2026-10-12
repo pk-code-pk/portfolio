@@ -2030,7 +2030,7 @@
   <video id="hero-vid-b" class="hero-frame hero-vid" muted loop playsinline preload="none"></video>
   <iframe
     id="hero-frame"
-    data-src="rayquaza-flying-clean.html?v=70"
+    data-src="rayquaza-flying-clean.html?v=71&amp;lite=1&amp;poke=0"
     class="hero-frame"
     title="praneel · 3d hero"
     allow="autoplay; fullscreen"
@@ -3731,7 +3731,17 @@
     const liveBtn = document.getElementById('live-toggle');
     const liveName = document.getElementById('live-toggle-name');
     if (!heroEl || !A || !B) return;
+    // LIVE_DEFAULT: the real WebGL scene is the hero (lite profile on
+    // phones, no creature), over the poster. The baked videos never get a
+    // src, so none of them download. The poster carries the hero for any
+    // device that can't boot GL, and the scene's own quality governor
+    // freezes to a still on one that can't keep up.
+    const LIVE_DEFAULT = true;
     heroEl.classList.add('mode-video');
+    if (LIVE_DEFAULT) {
+      document.getElementById('poke-dd')?.style.setProperty('display', 'none');
+      liveBtn?.style.setProperty('display', 'none');
+    }
 
     // ── rendition pick: best codec this browser hardware-decodes, and
     //    the orientation matching the viewport (portrait bake reuses the
@@ -3761,7 +3771,7 @@
 
     // first paint; signals the SAME __heroReady handshake the iframe
     // used, so the preloader + .is-live fade need zero changes.
-    front.src = src(clip);
+    if (!LIVE_DEFAULT) front.src = src(clip);
     front.addEventListener('canplay', function once() {
       front.removeEventListener('canplay', once);
       try { front.currentTime = XFADE_S; } catch (e) {}
@@ -3867,6 +3877,7 @@
       }
     }
     if (liveBtn) liveBtn.addEventListener('click', () => setMode(heroEl.classList.contains('mode-video')));
+    if (LIVE_DEFAULT) setMode(true);
   })();
 
   /* ─── (#1) pause the 3D hero iframe when scrolled off-screen ───────
