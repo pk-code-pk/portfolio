@@ -379,6 +379,28 @@
     @media (max-width: 640px) {
       .hero.hero-3d { background-image: url('hero-poster-mobile.webp?v=2'); }
     }
+    /* tagline under the scene's "pk" letters, whose bottom edge lands near
+       65% of the hero in the baked clips. .hero-3d prefix: outranks the
+       generic `.hero > * { position: relative }` rule further down. */
+    .hero-3d .hero-pk-tag {
+      position: absolute;
+      left: 50%;
+      top: 68%;
+      transform: translateX(-50%);
+      width: min(560px, calc(100% - 2 * var(--pad, 24px)));
+      margin: 0;
+      text-align: center;
+      font-size: clamp(.74rem, 1vw, .88rem);
+      line-height: 1.6;
+      letter-spacing: .01em;
+      color: rgba(255,255,255,0.72);
+      text-shadow: 0 1px 12px rgba(0,0,0,0.6);
+      pointer-events: none;
+      z-index: 2;
+    }
+    @media (max-width: 640px) {
+      .hero-3d .hero-pk-tag { top: 66%; font-size: .78rem; line-height: 1.55; }
+    }
     /* the live scene crossfades over the poster once it signals ready */
     .hero-3d .hero-frame { opacity: 0; transition: opacity .55s ease; }
     .hero-3d.is-live .hero-frame { opacity: 1; }
@@ -2014,6 +2036,7 @@
     allow="autoplay; fullscreen"
     loading="eager"
     frameborder="0"></iframe>
+  <p class="hero-pk-tag">i’m praneel. i study cs at harvard and work across design and engineering: ui/ux, agent infrastructure, computer-use automation, and full-stack ai products. i’ve interned at janet.ai and indeed, built and sold an app, and run a product with paying users on the side.</p>
 </section>
 
 <!-- music player (parent-owned; drives the audio + feeds amplitude to the hero iframe) -->
