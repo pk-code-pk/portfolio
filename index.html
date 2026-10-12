@@ -42,13 +42,11 @@
        exists — the OTHER is display:none so it costs nothing. */
     .hero-vid { object-fit:cover; background:#000; pointer-events:none;
                 opacity:0 !important; transition:opacity .5s ease; }
-    /* rayquaza's baked clip reads darker than the live scene did — flat
-       compositor brightness lift, cheap (no re-bake needed). gyarados is
-       fine as baked, so this is scoped off once show() flips .is-gya on
-       (see the audio engine below). __heroVideoAmp's audio-pulse filter
-       folds this same base value in so the boost doesn't dip out when
-       music kicks in — and skips it too while .is-gya is set. */
-    .hero-3d:not(.is-gya) .hero-vid { filter: brightness(1.35) contrast(1.02); }
+    /* the baked clip reads darker than the live scene did — flat
+       compositor brightness lift, cheap (no re-bake needed).
+       __heroVideoAmp's audio-pulse filter folds this same base value in
+       so the boost doesn't dip out when music kicks in. */
+    .hero-3d .hero-vid { filter: brightness(1.35) contrast(1.02); }
     .hero-3d.is-live .hero-vid.on { opacity:1 !important; }
     .hero-3d.mode-video iframe.hero-frame { display:none; }
     .hero-3d.mode-live  .hero-vid         { display:none; }
@@ -479,9 +477,8 @@
     }
     #music-toggle:hover { color: #fff; transform: scale(1.08); }
     #music-toggle svg { width: 18px; height: 18px; display: block; }
-    /* pokemon switch — swaps the 3D hero creature (rayquaza ↔ gyarados)
-       (#live-toggle and #track-switch share the exact same look) */
-    #poke-switch, #live-toggle, #track-switch {
+    /* music-bar pill buttons (#live-toggle and #track-switch share a look) */
+    #live-toggle, #track-switch {
       background: none; border: none; padding: 4px 8px;
       color: rgba(255,255,255,0.8); cursor: pointer;
       display: flex; align-items: center; gap: 7px;
@@ -489,18 +486,18 @@
       letter-spacing: .14em; text-transform: lowercase; white-space: nowrap;
       transition: color .25s, transform .2s;
     }
-    #poke-switch:hover, #live-toggle:hover, #track-switch:hover { color: #fff; transform: scale(1.06); }
-    #poke-switch svg, #live-toggle svg, #track-switch svg { width: 15px; height: 15px; display: block; }
+    #live-toggle:hover, #track-switch:hover { color: #fff; transform: scale(1.06); }
+    #live-toggle svg, #track-switch svg { width: 15px; height: 15px; display: block; }
     /* narrow phones: the bar can't fit several labeled buttons — drop the
        text labels, keep the icons */
     @media (max-width: 480px) {
-      #poke-switch .poke-name, #live-toggle .poke-name, #track-switch .poke-name { display: none; }
-      #poke-switch, #live-toggle, #track-switch { padding: 4px 5px; }
+      #live-toggle .poke-name, #track-switch .poke-name { display: none; }
+      #live-toggle, #track-switch { padding: 4px 5px; }
     }
     @media (max-width: 480px) {
       #music-player { gap: 10px; padding: 8px 12px; bottom: 16px; }
     }
-    /* ─── dropdown menus (poke-switch / track-switch) — same pill look as
+    /* ─── dropdown menus (track-switch) — same pill look as
        the rest of the bar, opens upward since the player sits fixed at
        the bottom of the viewport ─── */
     .dd { position: relative; display: inline-flex; }
@@ -2059,11 +2056,10 @@
        WebGL, hardware decode, no heat. The iframe below is the LIVE
        opt-in: src intentionally absent (data-src) so no GL boots unless
        the visitor asks; the toggle in the music bar swaps modes. -->
-  <video id="hero-vid-a" class="hero-frame hero-vid" muted loop playsinline autoplay preload="auto"></video>
-  <video id="hero-vid-b" class="hero-frame hero-vid" muted loop playsinline preload="none"></video>
+  <video id="hero-vid" class="hero-frame hero-vid" muted loop playsinline autoplay preload="auto"></video>
   <iframe
     id="hero-frame"
-    data-src="rayquaza-flying-clean.html?v=70"
+    data-src="rayquaza-flying-clean.html?v=71&amp;poke=0"
     class="hero-frame"
     title="praneel · 3d hero"
     allow="autoplay; fullscreen"
@@ -2107,15 +2103,6 @@
       <svg class="dd-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
     </button>
     <div class="dd-menu" id="track-dd-menu" role="listbox"></div>
-  </div>
-  <!-- pokemon switch: dropdown to pick the 3D hero creature -->
-  <div class="dd" id="poke-dd">
-    <button id="poke-switch" class="dd-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Choose pokemon" title="Choose pokemon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-      <span class="poke-name" id="poke-switch-name">switch pkmn</span>
-      <svg class="dd-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-    </button>
-    <div class="dd-menu" id="poke-dd-menu" role="listbox"></div>
   </div>
   <!-- live-3d toggle: boots the real WebGL scene on demand; default hero
        is the pre-baked video (no GL, no heat) -->
@@ -3743,27 +3730,25 @@
   }
 
   /* ─── VIDEO HERO controller ─────────────────────────────────────────
-     Default hero = pre-baked video loops of the WebGL scene (hardware
-     decode, zero GL, no heat). Three clips per orientation — idle,
-     flight, gya(rados) — with in-clip crossfade tails so <video loop>
-     wraps seamlessly. A/B layer stack crossfades between clips. The
-     iframe boots ONLY via the live-3d toggle.
+     Default hero = a pre-baked video loop of the WebGL scene (hardware
+     decode, zero GL, no heat): one clip, `idle` (glass pk + world, no
+     creature), per orientation, with an in-clip crossfade tail so
+     <video loop> wraps seamlessly. The iframe boots ONLY via the live-3d
+     toggle.
 
      Hooks exposed for the existing IIFEs below (all only set while in
      video mode, so those blocks fall through to their iframe paths in
      live mode):
        __heroVideoAction(action)  pause/throttle/resume  ← IntersectionObserver
-       __heroVideoSwitch()        rayquaza ⇄ gyarados    ← #poke-switch
-       __heroVideoClick()         no-op, video-mode flag ← hero click forward
+       __heroVideoClick()         play-kick, video-mode flag ← hero click forward
        __heroVideoAmp(amp)        music pulse            ← audio engine */
   (function () {
     const heroEl = document.querySelector('.hero-3d');
-    const A = document.getElementById('hero-vid-a');
-    const B = document.getElementById('hero-vid-b');
+    const vid = document.getElementById('hero-vid');
     const iframe = document.getElementById('hero-frame');
     const liveBtn = document.getElementById('live-toggle');
     const liveName = document.getElementById('live-toggle-name');
-    if (!heroEl || !A || !B) return;
+    if (!heroEl || !vid) return;
     heroEl.classList.add('mode-video');
 
     // ── rendition pick: best codec this browser hardware-decodes, and
@@ -3775,98 +3760,47 @@
       probe.canPlayType('video/webm; codecs="vp09.00.41.10"')    ? '.webm' :
       '.mp4';
     const ORIENT = innerHeight > innerWidth ? 'port' : 'land';
-    const src = (clip) => `hero-video/${clip}-${ORIENT}${EXT}`;
-
-    let front = A, back = B;      // front = visible layer
-    // both orientations open ON the figure-8 flight loop — praneel cut the
-    // idle clip entirely, so flight IS the hero everywhere. Nothing to
-    // toggle to on click; the poke-switch is the only clip control left.
-    let clip = 'flight';          // flight | gya
-    let set  = 'rayquaza';        // rayquaza | gyarados
     let paused = false;
 
-    // every clip's first 1.5s is the baked loop crossfade — its own tail
+    // the clip's first 1.5s is the baked loop crossfade — its own tail
     // dissolving over its head (that's what makes <video loop> seamless).
-    // Fine to pass THROUGH while looping; ugly to START on: a fresh load
-    // at t=0 opens on a double-exposure, worst on gyarados where the two
-    // ghosts swim opposite directions. So fresh loads begin just past it.
+    // Fine to pass THROUGH while looping; a fresh load starts just past it.
     const XFADE_S = 1.5;
 
     // first paint; signals the SAME __heroReady handshake the iframe
     // used, so the preloader + .is-live fade need zero changes.
-    front.src = src(clip);
-    front.addEventListener('canplay', function once() {
-      front.removeEventListener('canplay', once);
-      try { front.currentTime = XFADE_S; } catch (e) {}
-      front.classList.add('on');
-      front.play().catch(() => {});
+    vid.src = `hero-video/idle-${ORIENT}${EXT}`;
+    vid.addEventListener('canplay', function once() {
+      vid.removeEventListener('canplay', once);
+      try { vid.currentTime = XFADE_S; } catch (e) {}
+      vid.classList.add('on');
+      vid.play().catch(() => {});
       window.postMessage({ __heroReady: true }, '*');
-      // background-prefetch the other clips once the boot loop is up
-      const idle = window.requestIdleCallback || ((f) => setTimeout(f, 2500));
-      idle(() => {
-        // no idle clip ships in either orientation
-        for (const c of ['flight', 'gya']) if (c !== clip) fetch(src(c)).catch(() => {});
-      });
     });
-
-    function show(next) {
-      if (clip === next) return;
-      clip = next;
-      // brightness lift is rayquaza-only (that clip reads dark; gyarados
-      // doesn't) — see the .hero-3d.is-gya override in the CSS above.
-      heroEl.classList.toggle('is-gya', next === 'gya');
-      back.src = src(next);
-      const b = back;
-      b.addEventListener('canplay', function once() {
-        b.removeEventListener('canplay', once);
-        if (clip !== next) return;           // superseded mid-load
-        try { b.currentTime = XFADE_S; } catch (e) {}   // skip the baked loop blend
-        b.play().catch(() => {});
-        b.classList.add('on');
-        front.classList.remove('on');
-        const old = front; front = b; back = old;
-        setTimeout(() => { if (back === old) { old.pause(); old.removeAttribute('src'); old.load(); } }, 600);
-      });
-      b.load();
-    }
 
     function installHooks() {
       window.__heroVideoAction = (action) => {
         paused = action === 'pause';
-        if (paused) front.pause();
-        else front.play().catch(() => {});
+        if (paused) vid.pause();
+        else vid.play().catch(() => {});
         // 'throttle' needs nothing: video decode is off-main-thread
       };
-      window.__heroVideoSwitch = () => {
-        set = set === 'rayquaza' ? 'gyarados' : 'rayquaza';
-        // rayquaza's clip is flight in both orientations — there is no
-        // idle bake to return to, and asking for one 404s silently:
-        // show() waits on canplay, which a missing file never fires
-        show(set === 'gyarados' ? 'gya' : 'flight');
-      };
-      // Nothing to toggle (no idle bake), but it MUST stay defined:
-      // forward() below tests for this hook to detect video mode and stop
-      // before the live-scene raycast path. It doubles as the play-kick —
-      // iOS blocks even muted autoplay in Low Power Mode and paints its
-      // native play glyph, which is untappable here (.hero-vid is
-      // pointer-events:none), so the tap lands in forward() instead.
-      // Running inside the gesture handler is what makes play() allowed.
+      // Nothing to toggle, but it MUST stay defined: forward() below tests
+      // for this hook to detect video mode and stop before the live-scene
+      // raycast path. It doubles as the play-kick — iOS blocks even muted
+      // autoplay in Low Power Mode and paints its native play glyph, which
+      // is untappable here (.hero-vid is pointer-events:none), so the tap
+      // lands in forward() instead. Running inside the gesture handler is
+      // what makes play() allowed.
       window.__heroVideoClick = () => {
-        if (!paused && front.paused) front.play().catch(() => {});
+        if (!paused && vid.paused) vid.play().catch(() => {});
       };
       window.__heroVideoAmp = (amp) => {
         // compositor-only pulse standing in for the baked scene's uPulse.
-        // rayquaza-only brightness lift (see .hero-3d.is-gya in the CSS) —
-        // this inline filter would otherwise override that CSS scoping
-        // and boost gyarados too, so it checks the same class here.
-        if (heroEl.classList.contains('is-gya')) {
-          front.style.filter = amp > 0.01 ? `brightness(${(1 + amp * 0.22).toFixed(3)})` : '';
-          return;
-        }
         // Base 1.35/contrast 1.02 matches the CSS .hero-vid lift — folding
         // it in here (instead of clearing to '' when quiet) means the
         // pulse never dips BELOW the baseline brightness at low amplitude.
-        front.style.filter = `brightness(${(1.35 + amp * 0.22).toFixed(3)}) contrast(1.02)`;
+        vid.style.filter = `brightness(${(1.35 + amp * 0.22).toFixed(3)}) contrast(1.02)`;
       };
     }
     installHooks();
@@ -3876,25 +3810,25 @@
     // playback if iOS ever pauses the tab's media in the background.
     // mode-video guard: in live mode the video is parked on purpose.
     const kick = () => {
-      if (heroEl.classList.contains('mode-video') && !paused && front.paused)
-        front.play().catch(() => {});
+      if (heroEl.classList.contains('mode-video') && !paused && vid.paused)
+        vid.play().catch(() => {});
     };
     document.addEventListener('touchend', kick, { passive: true });
     document.addEventListener('click', kick, true);
 
-    // ── live-3d opt-in: boot the real scene, park the videos ──────────
+    // ── live-3d opt-in: boot the real scene, park the video ───────────
     function setMode(live) {
       if (live) {
         if (iframe && !iframe.src) iframe.src = iframe.dataset.src;
         heroEl.classList.remove('mode-video'); heroEl.classList.add('mode-live');
-        front.pause();
-        delete window.__heroVideoAction; delete window.__heroVideoSwitch;
+        vid.pause();
+        delete window.__heroVideoAction;
         delete window.__heroVideoClick;  delete window.__heroVideoAmp;
         if (liveName) liveName.textContent = 'video';
       } else {
         heroEl.classList.remove('mode-live'); heroEl.classList.add('mode-video');
         if (iframe && iframe.contentWindow) iframe.contentWindow.postMessage({ __heroAction: 'pause' }, '*');
-        if (!paused) front.play().catch(() => {});
+        if (!paused) vid.play().catch(() => {});
         installHooks();
         if (liveName) liveName.textContent = 'live 3d';
       }
@@ -3991,32 +3925,6 @@
     render();
     return { render, close };
   }
-
-  /* ─── pokemon switch dropdown → tells the hero iframe to swap creature ──
-     The scene's own toggle is hidden when embedded, so the parent owns
-     this control. Only 2 creatures exist and the hook (__heroVideoSwitch /
-     postMessage) only knows how to TOGGLE, not select directly — so
-     selecting the option that's already current is a no-op, and picking
-     the other one fires the same toggle the old cycle-button used. */
-  (function () {
-    const frame = document.getElementById('hero-frame');
-    if (!frame) return;
-    const POKEMON = [
-      { key: 'rayquaza', label: 'rayquaza' },
-      { key: 'gyarados', label: 'gyarados' },
-    ];
-    let current = 'rayquaza';                 // hero's default creature
-    // label stays static ("switch pkmn") — the checkmark in the open
-    // menu shows which one's current, not the button text.
-    function selectPokemon(i) {
-      const target = POKEMON[i].key;
-      if (target === current) return;
-      if (window.__heroVideoSwitch) window.__heroVideoSwitch();
-      else if (frame.contentWindow) frame.contentWindow.postMessage({ __heroAction: 'switchPokemon' }, '*');
-      current = target;
-    }
-    setupDropdown('poke-dd', 'poke-dd-menu', POKEMON, () => POKEMON.findIndex((p) => p.key === current), selectPokemon);
-  })();
 
   /* ─── forward hero clicks/taps into the 3D iframe ─────────────────────
      The iframe is pointer-events:none (so the page scrolls freely and iOS
