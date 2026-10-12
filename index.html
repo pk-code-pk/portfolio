@@ -44,9 +44,8 @@
                 opacity:0 !important; transition:opacity .5s ease; }
     /* the baked clip reads darker than the live scene did — flat
        compositor brightness lift, cheap (no re-bake needed).
-       __heroVideoAmp's audio-pulse filter folds this same base value in
-       so the boost doesn't dip out when music kicks in. */
-    .hero-3d .hero-vid { filter: brightness(1.35) contrast(1.02); }
+       */
+    .hero-3d:not(.is-gya) .hero-vid { filter: brightness(1.35) contrast(1.02); }
     .hero-3d.is-live .hero-vid.on { opacity:1 !important; }
     .hero-3d.mode-video iframe.hero-frame { display:none; }
     .hero-3d.mode-live  .hero-vid         { display:none; }
@@ -254,7 +253,7 @@
     /* ─── nav ─── */
     /* floating pill bar, not an edge-to-edge overlay: inset from all
        three sides so the page background shows around it (same "floating
-       chrome" language as #music-player), stadium-shaped corners.
+       chrome" language as #hero-bar), stadium-shaped corners.
        Gets slightly more opaque + a soft shadow once you scroll
        (.is-scrolled) so it reads as something that's actually there. */
     nav {
@@ -387,7 +386,7 @@
     .hero-3d .hero-pk-tag {
       position: absolute;
       left: 50%;
-      top: 63%;
+      top: 67%;
       transform: translateX(-50%);
       width: min(600px, calc(100% - 2 * var(--pad, 24px)));
       margin: 0;
@@ -430,7 +429,7 @@
       .hero-3d .hero-pk-tag > span { animation: none; }
     }
     @media (max-width: 640px) {
-      .hero-3d .hero-pk-tag { top: 61%; font-size: .8rem; line-height: 1.6; }
+      .hero-3d .hero-pk-tag { top: 64%; font-size: .8rem; line-height: 1.6; }
     }
     /* the live scene crossfades over the poster once it signals ready */
     .hero-3d .hero-frame { opacity: 0; transition: opacity .55s ease; }
@@ -444,7 +443,7 @@
       display: block;
       /* iframe is purely visual — never intercept pointer/touch so the
          page scrolls past the hero on mobile and the parent owns the
-         only interactive control (the music player below). */
+         only interactive controls (the hero bar below). */
       pointer-events: none;
       /* keep this on its own compositor layer so scrolling away and back
          doesn't tear down + re-promote it (a source of the resume hitch). */
@@ -452,12 +451,12 @@
       backface-visibility: hidden;
     }
 
-    /* ─── music player (lives in PARENT so iOS gesture unlock + scroll
-       both work; the visual iframe is pointer-events:none) ─── */
-    #music-player {
+    /* ─── hero bar: the easter-egg toggle (+ live 3d on desktop). Lives in
+       the PARENT; the visual iframe is pointer-events:none. ─── */
+    #hero-bar {
       position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
-      display: flex; align-items: center; gap: 18px;
-      padding: 10px 18px;
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 10px;
       background: rgba(10, 12, 22, 0.55);
       backdrop-filter: blur(14px) saturate(120%);
       -webkit-backdrop-filter: blur(14px) saturate(120%);
@@ -467,159 +466,21 @@
       user-select: none;
       transition: opacity .4s ease;
     }
-    /* fade the player out once you scroll past the hero */
-    #music-player.is-hidden { opacity: 0; pointer-events: none; }
-    #music-toggle {
-      background: none; border: none; padding: 4px;
-      color: rgba(255,255,255,0.8); cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      transition: color .25s, transform .2s;
-    }
-    #music-toggle:hover { color: #fff; transform: scale(1.08); }
-    #music-toggle svg { width: 18px; height: 18px; display: block; }
-    /* music-bar pill buttons (#live-toggle and #track-switch share a look) */
-    #live-toggle, #track-switch {
+    /* fade the bar out once you scroll past the hero */
+    #hero-bar.is-hidden { opacity: 0; pointer-events: none; }
+    #egg-toggle, #live-toggle {
       background: none; border: none; padding: 4px 8px;
       color: rgba(255,255,255,0.8); cursor: pointer;
       display: flex; align-items: center; gap: 7px;
-      font: 600 11px/1 'Hanken Grotesk', ui-monospace, monospace;
+      font: 600 11px/1 'Hanken Grotesk', sans-serif;
       letter-spacing: .14em; text-transform: lowercase; white-space: nowrap;
       transition: color .25s, transform .2s;
     }
-    #live-toggle:hover, #track-switch:hover { color: #fff; transform: scale(1.06); }
-    #live-toggle svg, #track-switch svg { width: 15px; height: 15px; display: block; }
-    /* narrow phones: the bar can't fit several labeled buttons — drop the
-       text labels, keep the icons */
+    #egg-toggle:hover, #live-toggle:hover { color: #fff; transform: scale(1.06); }
+    #egg-toggle svg, #live-toggle svg { width: 15px; height: 15px; display: block; }
     @media (max-width: 480px) {
-      #live-toggle .poke-name, #track-switch .poke-name { display: none; }
-      #live-toggle, #track-switch { padding: 4px 5px; }
+      #hero-bar { bottom: 16px; }
     }
-    @media (max-width: 480px) {
-      #music-player { gap: 10px; padding: 8px 12px; bottom: 16px; }
-    }
-    /* ─── dropdown menus (track-switch) — same pill look as
-       the rest of the bar, opens upward since the player sits fixed at
-       the bottom of the viewport ─── */
-    .dd { position: relative; display: inline-flex; }
-    /* only shown once a second track exists — see TRACKS in the audio
-       engine script; toggled via inline style on the WRAPPER (not the
-       button) so the chevron + menu hide along with it */
-    #track-dd { display: none; }
-    .dd-chevron { width: 10px; height: 10px; display: block; margin-left: -2px; transition: transform .2s ease; }
-    .dd[data-open="true"] .dd-chevron { transform: rotate(180deg); }
-    .dd-menu {
-      position: absolute; bottom: calc(100% + 10px); left: 50%;
-      transform: translateX(-50%) translateY(6px);
-      width: max-content; min-width: 100%;
-      background: rgba(10, 12, 22, 0.92);
-      backdrop-filter: blur(14px) saturate(120%);
-      -webkit-backdrop-filter: blur(14px) saturate(120%);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 12px; padding: 4px;
-      opacity: 0; visibility: hidden; pointer-events: none;
-      transition: opacity .18s ease, transform .18s ease, visibility 0s linear .18s;
-      z-index: 60;
-    }
-    .dd[data-open="true"] .dd-menu {
-      opacity: 1; visibility: visible; pointer-events: auto;
-      transform: translateX(-50%) translateY(0);
-      transition: opacity .18s ease, transform .18s ease;
-    }
-    .dd-item {
-      display: block; width: 100%; text-align: left;
-      background: none; border: none; padding: 7px 12px; border-radius: 8px;
-      color: rgba(255,255,255,0.7); cursor: pointer;
-      font: 600 11px/1 'Hanken Grotesk', ui-monospace, monospace;
-      letter-spacing: .1em; text-transform: lowercase; white-space: nowrap;
-      transition: background .15s, color .15s;
-    }
-    .dd-item:hover, .dd-item:focus-visible { background: rgba(255,255,255,0.12); color: #fff; }
-    .dd-item[aria-selected="true"] { color: #fff; }
-    .dd-item[aria-selected="true"]::before { content: '\2713  '; opacity: .55; }
-    /* invisible counterweight = play button (18px svg + 4px×2 padding) so
-       the slider track sits on the exact viewport-center axis */
-    .np-balance { width: 26px; flex: 0 0 26px; }
-    .slider-wrapper {
-      display: flex; align-items: center; gap: 12px;
-      width: 200px; touch-action: none; user-select: none;
-      transition: transform .22s cubic-bezier(.23,1,.32,1), opacity .22s;
-      opacity: 0.7;
-    }
-    .slider-wrapper.is-hover { transform: scale(1.18); opacity: 1; }
-    /* the bar's fixed-width parts (200px volume slider + per-item gaps +
-       padding) add up to ~370-410px depending on which controls are
-       visible — wider than most phones, so on narrow viewports it
-       overflowed off both edges instead of just centering smaller.
-       Shrink the slider so the whole pill fits with room on each side.
-       (placed AFTER the base .slider-wrapper rule above on purpose — same
-       specificity, so source order decides, and an earlier media-queried
-       copy would lose to that later plain rule regardless of viewport.) */
-    @media (max-width: 480px) {
-      .slider-wrapper { width: clamp(70px, 22vw, 120px); gap: 8px; }
-    }
-    .slider-wrapper .vol-icon {
-      width: 16px; height: 16px; color: rgba(255,255,255,0.65);
-      display: flex; align-items: center; justify-content: center;
-      transform: translateX(0);
-      transition: transform .22s cubic-bezier(.23,1,.32,1);
-    }
-    .slider-wrapper .vol-icon svg { width: 16px; height: 16px; display: block; }
-    .slider-root {
-      position: relative; flex: 1;
-      cursor: grab; padding: 14px 0;
-      touch-action: none;
-    }
-    .slider-root:active { cursor: grabbing; }
-    .slider-track-wrap { transform-origin: center; transition: height .22s ease, margin .22s ease; }
-    .slider-track {
-      position: relative; height: 4px;
-      background: rgba(255,255,255,0.18);
-      border-radius: 999px; overflow: hidden;
-      transition: height .22s ease;
-    }
-    .slider-wrapper.is-hover .slider-track { height: 8px; }
-    .slider-range {
-      position: absolute; left: 0; top: 0; bottom: 0;
-      background: rgba(255,255,255,0.85);
-      border-radius: 999px; width: 25%;
-    }
-    /* now-playing buffer strip between hero and work */
-    .now-playing {
-      display: flex; align-items: center; justify-content: center;
-      gap: clamp(16px, 3vw, 32px);
-      padding: clamp(28px, 5vw, 52px) var(--pad);
-      background: #000;
-    }
-    .now-playing .np-label,
-    .now-playing .np-title {
-      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-      font-size: .62rem; letter-spacing: .26em; text-transform: uppercase;
-      color: rgba(255,255,255,0.45); white-space: nowrap;
-    }
-    .now-playing .np-title { color: rgba(255,255,255,0.7); }
-    .now-playing .np-wave {
-      flex: 1; max-width: 420px; height: 36px; display: block;
-    }
-
-    /* dropped entirely on mobile (see the shared 880px block below) — the
-       row layout used to squeeze the canvas to ~0px between the two
-       nowrap labels and get stacked into a column as a fix, but that's
-       dead weight now: the waveform draws nothing on touch anyway (no
-       analyser graph on mobile, see AUDIO_TOUCH in the audio engine), so
-       the strip was just an empty black bar taking up scroll space. */
-
-    /* subtle "tap for sound" hint until first interaction */
-    #sound-hint {
-      position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%);
-      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-      font-size: .58rem; letter-spacing: .22em; text-transform: uppercase;
-      color: rgba(255,255,255,0.5); z-index: 50; pointer-events: none;
-      white-space: nowrap;
-      transition: opacity .5s ease;
-      animation: sound-hint-pulse 2.4s ease-in-out infinite;
-    }
-    #sound-hint.is-gone { opacity: 0; }
-    @keyframes sound-hint-pulse { 0%,100% { opacity: .3; } 50% { opacity: .65; } }
 
     /* ─── (original) hero ─── */
     .hero {
@@ -1850,10 +1711,6 @@
          scene in place of the baked video) — mobile GPUs shouldn't be
          asked to run it, so the control doesn't even show there. */
       #live-toggle { display: none; }
-      /* now-playing waveform strip — draws nothing on touch anyway (no
-         analyser graph there, see AUDIO_TOUCH), so it was just an empty
-         black bar taking up scroll space on phones. */
-      .now-playing { display: none; }
     }
     /* logo text doesn't scale down with the viewport (it's not part of the
        flex flow's width math — .nav-links is position:absolute and centers
@@ -2055,7 +1912,7 @@
   <!-- VIDEO HERO (default): pre-baked loops of the same scene — zero
        WebGL, hardware decode, no heat. The iframe below is the LIVE
        opt-in: src intentionally absent (data-src) so no GL boots unless
-       the visitor asks; the toggle in the music bar swaps modes. -->
+       the visitor asks; the toggle in the hero bar swaps modes. -->
   <video id="hero-vid" class="hero-frame hero-vid" muted loop playsinline autoplay preload="auto"></video>
   <iframe
     id="hero-frame"
@@ -2068,42 +1925,13 @@
   <p class="hero-pk-tag"><span>i’m praneel. i study cs at <b>harvard</b> and work across <b>design&nbsp;and&nbsp;engineering</b>: ui/ux, agent infrastructure, computer-use automation, and full-stack ai products. i’ve interned at <b>janet.ai</b> and <b>indeed</b>, built and <b>sold&nbsp;an&nbsp;app</b>, and run a product with <b>paying&nbsp;users</b> on the side.</span></p>
 </section>
 
-<!-- music player (parent-owned; drives the audio + feeds amplitude to the hero iframe) -->
-<!-- preload="none": the 4.6MB track is NOT downloaded on page load (it was
-     the single biggest asset and competed with the hero for mobile-data
-     bandwidth). Music is gesture-started anyway, so it streams in only once
-     the user actually plays it — big first-load win on mobile data. -->
-<audio id="bg-audio" src="music/bg-music.mp3" loop preload="none" playsinline></audio>
-<div id="sound-hint">tap for sound</div>
-<div id="music-player">
-  <button id="music-toggle" aria-label="Toggle music">
-    <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7L8 5z"/></svg>
-    <svg id="icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+<!-- hero bar: easter egg (cycles the baked hero: no creature → rayquaza →
+     gyarados) + the desktop-only live-3d opt-in -->
+<div id="hero-bar">
+  <button id="egg-toggle" aria-label="Switch pokemon" title="?">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h6m6 0h6"/><circle cx="12" cy="12" r="3"/></svg>
+    <span class="poke-name" id="egg-name">pkmn</span>
   </button>
-  <div class="slider-wrapper" id="vol-wrapper">
-    <div class="vol-icon left">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 9v6h4l5 4V5L9 9H5z"/></svg>
-    </div>
-    <div class="slider-root" id="vol-root">
-      <div class="slider-track-wrap" id="vol-trackwrap">
-        <div class="slider-track"><div class="slider-range" id="vol-range"></div></div>
-      </div>
-    </div>
-    <div class="vol-icon right">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 4V5L7 9H3zm10.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg>
-    </div>
-  </div>
-  <!-- track switch: dropdown to pick the background track — see TRACKS in
-       the audio engine script. wrapper hidden by default, shown only once
-       TRACKS.length > 1 -->
-  <div class="dd" id="track-dd">
-    <button id="track-switch" class="dd-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Choose track" title="Choose track">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4l10 8-10 8V4z"/><path d="M19 5v14"/></svg>
-      <span class="poke-name" id="track-switch-name"></span>
-      <svg class="dd-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-    </button>
-    <div class="dd-menu" id="track-dd-menu" role="listbox"></div>
-  </div>
   <!-- live-3d toggle: boots the real WebGL scene on demand; default hero
        is the pre-baked video (no GL, no heat) -->
   <button id="live-toggle" aria-label="Toggle live 3D" title="Toggle live 3D">
@@ -2131,14 +1959,6 @@
   </div>
 </section>
 -->
-
-<!-- ── now-playing buffer strip (also a perf breather between the heavy
-     hero and the work list) ── -->
-<section class="now-playing" id="now-playing">
-  <span class="np-label">now playing</span>
-  <canvas id="np-wave" class="np-wave"></canvas>
-  <span class="np-title">astrothunder · slowed</span>
-</section>
 
 <hr class="rule">
 
@@ -3731,23 +3551,25 @@
 
   /* ─── VIDEO HERO controller ─────────────────────────────────────────
      Default hero = a pre-baked video loop of the WebGL scene (hardware
-     decode, zero GL, no heat): one clip, `idle` (glass pk + world, no
-     creature), per orientation, with an in-clip crossfade tail so
-     <video loop> wraps seamlessly. The iframe boots ONLY via the live-3d
-     toggle.
+     decode, zero GL, no heat): `idle` (glass pk + world, no creature),
+     per orientation, with an in-clip crossfade tail so <video loop> wraps
+     seamlessly. Easter egg: #egg-toggle cycles idle → flight (rayquaza) →
+     gya (gyarados) → idle; those clips download only when picked. The
+     iframe boots ONLY via the live-3d toggle.
 
      Hooks exposed for the existing IIFEs below (all only set while in
      video mode, so those blocks fall through to their iframe paths in
      live mode):
        __heroVideoAction(action)  pause/throttle/resume  ← IntersectionObserver
-       __heroVideoClick()         play-kick, video-mode flag ← hero click forward
-       __heroVideoAmp(amp)        music pulse            ← audio engine */
+       __heroVideoClick()         play-kick, video-mode flag ← hero click forward */
   (function () {
     const heroEl = document.querySelector('.hero-3d');
-    const vid = document.getElementById('hero-vid');
+    let vid = document.getElementById('hero-vid');
     const iframe = document.getElementById('hero-frame');
     const liveBtn = document.getElementById('live-toggle');
     const liveName = document.getElementById('live-toggle-name');
+    const eggBtn = document.getElementById('egg-toggle');
+    const eggName = document.getElementById('egg-name');
     if (!heroEl || !vid) return;
     heroEl.classList.add('mode-video');
 
@@ -3760,22 +3582,59 @@
       probe.canPlayType('video/webm; codecs="vp09.00.41.10"')    ? '.webm' :
       '.mp4';
     const ORIENT = innerHeight > innerWidth ? 'port' : 'land';
+    const src = (clip) => `hero-video/${clip}-${ORIENT}${EXT}`;
     let paused = false;
 
-    // the clip's first 1.5s is the baked loop crossfade — its own tail
+    // every clip's first 1.5s is the baked loop crossfade — its own tail
     // dissolving over its head (that's what makes <video loop> seamless).
     // Fine to pass THROUGH while looping; a fresh load starts just past it.
     const XFADE_S = 1.5;
 
     // first paint; signals the SAME __heroReady handshake the iframe
     // used, so the preloader + .is-live fade need zero changes.
-    vid.src = `hero-video/idle-${ORIENT}${EXT}`;
+    vid.src = src('idle');
     vid.addEventListener('canplay', function once() {
       vid.removeEventListener('canplay', once);
       try { vid.currentTime = XFADE_S; } catch (e) {}
       vid.classList.add('on');
       vid.play().catch(() => {});
       window.postMessage({ __heroReady: true }, '*');
+    });
+
+    // ── easter egg: swap clips by fading a fresh <video> in over the
+    //    current one (.hero-vid's opacity transition), then dropping the
+    //    old one, so there's never a black frame between clips.
+    const EGG = [
+      { clip: 'idle',   label: 'pkmn'     },
+      { clip: 'flight', label: 'rayquaza' },
+      { clip: 'gya',    label: 'gyarados' },
+    ];
+    let egg = 0, swapping = false;
+    function swapTo(clip) {
+      swapping = true;
+      const next = vid.cloneNode(false);
+      next.removeAttribute('id');
+      next.classList.remove('on');
+      next.src = src(clip);
+      vid.after(next);
+      next.addEventListener('canplay', function once() {
+        next.removeEventListener('canplay', once);
+        try { next.currentTime = XFADE_S; } catch (e) {}
+        if (!paused) next.play().catch(() => {});
+        // gyarados was baked bright enough; the CSS lift is for the rest
+        heroEl.classList.toggle('is-gya', clip === 'gya');
+        next.classList.add('on');
+        const old = vid;
+        vid = next;
+        setTimeout(() => { old.remove(); vid.id = 'hero-vid'; swapping = false; }, 550);
+      });
+    }
+    if (eggBtn) eggBtn.addEventListener('click', () => {
+      if (swapping) return;
+      if (heroEl.classList.contains('mode-live')) setMode(false);
+      egg = (egg + 1) % EGG.length;
+      if (eggName) eggName.textContent = EGG[egg].label;
+      swapTo(EGG[egg].clip);
     });
 
     function installHooks() {
@@ -3794,13 +3653,6 @@
       // what makes play() allowed.
       window.__heroVideoClick = () => {
         if (!paused && vid.paused) vid.play().catch(() => {});
-      };
-      window.__heroVideoAmp = (amp) => {
-        // compositor-only pulse standing in for the baked scene's uPulse.
-        // Base 1.35/contrast 1.02 matches the CSS .hero-vid lift — folding
-        // it in here (instead of clearing to '' when quiet) means the
-        // pulse never dips BELOW the baseline brightness at low amplitude.
-        vid.style.filter = `brightness(${(1.35 + amp * 0.22).toFixed(3)}) contrast(1.02)`;
       };
     }
     installHooks();
@@ -3823,7 +3675,7 @@
         heroEl.classList.remove('mode-video'); heroEl.classList.add('mode-live');
         vid.pause();
         delete window.__heroVideoAction;
-        delete window.__heroVideoClick;  delete window.__heroVideoAmp;
+        delete window.__heroVideoClick;
         if (liveName) liveName.textContent = 'video';
       } else {
         heroEl.classList.remove('mode-live'); heroEl.classList.add('mode-video');
@@ -3869,7 +3721,7 @@
 
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) heroRatio = e.intersectionRatio;
-      const player = document.getElementById('music-player');
+      const player = document.getElementById('hero-bar');
       if (player) player.classList.toggle('is-hidden', heroRatio < 0.4);
       syncHero();
     }, { threshold: [0, 0.02, 0.2, 0.4, 0.6, 0.8, 1] });
@@ -3883,49 +3735,6 @@
     }, { passive: true });
   })();
 
-  /* ─── generic dropdown: wires a .dd wrapper (trigger button + .dd-menu)
-     into an open/close/select menu. Vanilla JS/CSS — matches the bar's
-     existing pill look, no framework needed for a 2-3 item list.
-       items: [{ label }], getCurrentIndex(): number, onSelect(i): void
-     Only one dropdown open at a time; closes on outside click / Escape. */
-  function setupDropdown(ddId, menuId, items, getCurrentIndex, onSelect) {
-    const dd = document.getElementById(ddId);
-    const trigger = dd && dd.querySelector('.dd-trigger');
-    const menu = document.getElementById(menuId);
-    if (!dd || !trigger || !menu) return null;
-    function render() {
-      const curIdx = getCurrentIndex();
-      menu.innerHTML = '';
-      items.forEach((item, i) => {
-        const opt = document.createElement('button');
-        opt.type = 'button';
-        opt.className = 'dd-item';
-        opt.setAttribute('role', 'option');
-        opt.setAttribute('aria-selected', i === curIdx ? 'true' : 'false');
-        opt.textContent = item.label;
-        opt.addEventListener('click', (e) => {
-          e.stopPropagation();
-          close();
-          onSelect(i);
-          render();
-        });
-        menu.appendChild(opt);
-      });
-    }
-    function open() { dd.setAttribute('data-open', 'true'); trigger.setAttribute('aria-expanded', 'true'); }
-    function close() { dd.setAttribute('data-open', 'false'); trigger.setAttribute('aria-expanded', 'false'); }
-    trigger.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const isOpen = dd.getAttribute('data-open') === 'true';
-      document.querySelectorAll('.dd[data-open="true"]').forEach((o) => { if (o !== dd) o.setAttribute('data-open', 'false'); });
-      if (isOpen) close(); else { render(); open(); }
-    });
-    document.addEventListener('click', (e) => { if (!dd.contains(e.target)) close(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
-    render();
-    return { render, close };
-  }
-
   /* ─── forward hero clicks/taps into the 3D iframe ─────────────────────
      The iframe is pointer-events:none (so the page scrolls freely and iOS
      can unlock audio here), which means it NEVER receives a pointer itself.
@@ -3938,7 +3747,7 @@
     const forward = (clientX, clientY, target) => {
       // don't hijack clicks on real controls sitting over the hero
       if (target && target.closest &&
-          target.closest('button, a, input, select, label, #music-player')) return;
+          target.closest('button, a, input, select, label, #hero-bar')) return;
       // video mode: swallow the hero tap. The hook is a no-op now (no idle
       // bake to toggle to) but its presence is the video-mode test, and
       // the return matters — checked BEFORE the iframe rect below, since
@@ -3969,353 +3778,6 @@
     }, { passive: true });
   })();
 
-  /* ─── parent-owned audio engine + music player ────────────────────
-     Audio lives here in the TOP browsing context (not the iframe) so:
-       • iOS unlocks it from a real gesture on this page (the iframe is
-         pointer-events:none and never receives one);
-       • the page scrolls freely past the hero (no iframe touch-trap).
-     We compute amplitude from an AnalyserNode and push it straight into
-     the same-origin iframe via `__heroAmp` so the scene stays reactive. */
-  // ── track list: drop an mp3 into music/, add one line here, done.
-  // name is what shows in the player (falls back to the filename if
-  // omitted). bg-music.mp3 ships as track 0 so the player always has
-  // something to play; the switch button stays hidden until a second
-  // entry exists (see #track-switch's default display:none).
-  const TRACKS = [
-    { src: 'music/bg-music.mp3', name: 'astrothunder' },
-    { src: 'music/02-doomsday.mp3', name: 'doomsday' },
-    { src: 'music/highjack.mp3', name: 'right back' },
-  ];
-
-  (function () {
-    const audio   = document.getElementById('bg-audio');
-    const frame   = document.getElementById('hero-frame');
-    const hint    = document.getElementById('sound-hint');
-    const wrapper = document.getElementById('vol-wrapper');
-    const root    = document.getElementById('vol-root');
-    const range   = document.getElementById('vol-range');
-    const trackwrap = document.getElementById('vol-trackwrap');
-    const leftIcon  = wrapper.querySelector('.vol-icon.left');
-    const rightIcon = wrapper.querySelector('.vol-icon.right');
-    const toggleBtn = document.getElementById('music-toggle');
-    const iconPlay  = document.getElementById('icon-play');
-    const iconPause = document.getElementById('icon-pause');
-    const trackBtn  = document.getElementById('track-switch');
-    const trackName = document.getElementById('track-switch-name');
-
-    let audioCtx = null, analyser = null, gainNode = null, bytes = null;
-    let ready = false, started = false;
-    let volume = 0.25;          // 0..1
-    // On iOS/Safari, createMediaElementSource() reroutes the <audio> element's
-    // output exclusively through the Web Audio graph — and if that context
-    // doesn't fully run (a well-known iOS quirk) the result is TOTAL SILENCE,
-    // even after a tap. So on touch we do NOT build that graph: the <audio>
-    // element plays directly through its own output (reliable), volume is set
-    // on the element, and the hero gets a synthetic amplitude pulse instead of
-    // analyser data. Desktop keeps the full analyser graph for the visualizer.
-    const AUDIO_TOUCH = window.matchMedia('(hover: none), (pointer: coarse)').matches;
-
-    // Build the Web Audio graph. Must be created/resumed inside a user
-    // gesture on iOS, so we call this from the unlock handler.
-    function buildGraph() {
-      if (ready) return;
-      if (AUDIO_TOUCH) {
-        // no Web Audio graph on touch — element plays directly + own volume.
-        audio.volume = volume;
-        ready = true;
-        return;
-      }
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const src = audioCtx.createMediaElementSource(audio);
-      analyser  = audioCtx.createAnalyser();
-      analyser.fftSize = 128;
-      analyser.smoothingTimeConstant = 0.85;
-      gainNode  = audioCtx.createGain();
-      gainNode.gain.value = volume;
-      src.connect(analyser);
-      analyser.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-      bytes = new Uint8Array(analyser.frequencyBinCount);
-      ready = true;
-      ensureCryBuffer();
-    }
-
-    /* ── click Rayquaza → play its cry ──
-       cry plays through the already-unlocked AudioContext (decoded buffer)
-       so it fires instantly with no gesture-timing issues; falls back to a
-       plain <audio> if the context isn't up yet. */
-    // preload='none': the cry is only needed after someone taps Rayquaza,
-    // but preload='auto' was downloading it during initial page load where
-    // it competed with the hero's model + bundle for bandwidth.
-    const cryAudio = new Audio('sfx/rayquaza-cry.mp3');
-    cryAudio.preload = 'none';
-    let cryBuffer = null, cryFetching = false;
-    function ensureCryBuffer() {
-      if (cryBuffer || cryFetching || !audioCtx) return;
-      cryFetching = true;
-      fetch('sfx/rayquaza-cry.mp3').then(r => r.arrayBuffer())
-        .then(b => audioCtx.decodeAudioData(b))
-        .then(buf => { cryBuffer = buf; })
-        .catch(() => { cryFetching = false; });
-    }
-    window.__playCry = function () {
-      if (audioCtx && cryBuffer) {
-        const s = audioCtx.createBufferSource();
-        s.buffer = cryBuffer;
-        const g = audioCtx.createGain(); g.gain.value = 0.32;
-        s.connect(g); g.connect(audioCtx.destination);
-        s.start(0);
-      } else {
-        const a = cryAudio.cloneNode(); a.volume = 0.32; a.play().catch(() => {});
-      }
-    };
-    // forward hero clicks (iframe is pointer-events:none, so they land here)
-    // to the iframe as normalized device coords for model raycasting.
-    if (frame) {
-      const heroEl = document.querySelector('.hero-3d');
-      (heroEl || frame).addEventListener('click', (e) => {
-        const r = frame.getBoundingClientRect();
-        const x = ((e.clientX - r.left) / r.width) * 2 - 1;
-        const y = -(((e.clientY - r.top) / r.height) * 2 - 1);
-        try { frame.contentWindow.__heroClick = { x, y }; } catch (err) {}
-      });
-    }
-
-    // iOS unlock: everything synchronous inside the gesture.
-    // BUGFIX: on touch, buildGraph() intentionally creates NO AudioContext
-    // (see AUDIO_TOUCH above) — but this function then dereferenced
-    // audioCtx.state, threw inside the try, and skipped audio.play()
-    // entirely. Result: tapping the page/player never started the music on
-    // phones. The context steps are now guarded so play() always runs.
-    function unlock() {
-      try {
-        buildGraph();
-        if (audioCtx) {
-          if (audioCtx.state === 'suspended') audioCtx.resume();
-          // 1-sample silent buffer fully unlocks the context on iOS
-          const b = audioCtx.createBuffer(1, 1, 22050);
-          const s = audioCtx.createBufferSource();
-          s.buffer = b; s.connect(audioCtx.destination); s.start(0);
-        }
-        audio.play().then(() => { started = true; refreshIcons(); }).catch(() => {});
-      } catch (e) { /* ignore */ }
-      dismissHint();
-    }
-    function dismissHint() {
-      if (hint && !hint.classList.contains('is-gone')) {
-        hint.classList.add('is-gone');
-        setTimeout(() => hint.remove(), 600);
-      }
-    }
-
-    // first interaction anywhere on the page starts the music
-    function onFirstGesture() {
-      unlock();
-      window.removeEventListener('pointerdown', onFirstGesture);
-      window.removeEventListener('touchend',   onFirstGesture);
-      window.removeEventListener('keydown',     onFirstGesture);
-    }
-    window.addEventListener('pointerdown', onFirstGesture, { passive: true });
-    window.addEventListener('touchend',   onFirstGesture, { passive: true });
-    window.addEventListener('keydown',     onFirstGesture, { passive: true });
-    // best-effort immediate start (works on browsers that allow it)
-    audio.play().then(() => { started = true; buildGraph(); refreshIcons(); dismissHint(); }).catch(() => {});
-
-    /* now-playing waveform (oscilloscope from time-domain data) */
-    const waveCanvas = document.getElementById('np-wave');
-    const waveCtx = waveCanvas ? waveCanvas.getContext('2d') : null;
-    let timeBytes = null;
-    function sizeWave() {
-      if (!waveCanvas) return;
-      const r = waveCanvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      waveCanvas.width = Math.max(1, r.width * dpr);
-      waveCanvas.height = Math.max(1, r.height * dpr);
-    }
-    if (waveCanvas) { sizeWave(); window.addEventListener('resize', sizeWave); }
-
-    // cheap equalizer: a row of thin white vertical bars whose heights
-    // follow the frequency spectrum, mirrored about the center line.
-    const BAR_COUNT = 40;
-    function drawWave() {
-      if (!waveCtx || !analyser) return;
-      // `bytes` is freshly filled with getByteFrequencyData in pumpAmp
-      const w = waveCanvas.width, h = waveCanvas.height, mid = h / 2;
-      waveCtx.clearRect(0, 0, w, h);
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const barW = Math.max(1, dpr * 2);
-      const gap  = (w - BAR_COUNT * barW) / (BAR_COUNT - 1);
-      // sample the lower ~75% of the spectrum (skip the dead high end)
-      const usable = Math.floor(bytes.length * 0.75);
-      waveCtx.fillStyle = 'rgba(255,255,255,0.85)';
-      for (let i = 0; i < BAR_COUNT; i++) {
-        const idx = Math.floor((i / BAR_COUNT) * usable);
-        const v = bytes[idx] / 255;                 // 0..1
-        const barH = Math.max(dpr, v * v * h * 0.92); // square for snappier peaks
-        const x = i * (barW + gap);
-        waveCtx.fillRect(x, mid - barH / 2, barW, barH);
-      }
-    }
-
-    /* feed amplitude into the hero iframe + draw waveform every frame.
-       Gated when nothing is playing: before the first user gesture (and
-       whenever paused) this loop was doing analyser reads + canvas draws +
-       cross-frame writes at 60fps for a silent page. Paused → one wave
-       clear, zero per-frame work. */
-    let waveCleared = false;
-    // raw per-frame FFT amplitude is jittery — the live scene never uses it
-    // directly either (see rayquaza-flying-clean.html's pkWet.uPulse lerp,
-    // `+= (amp - uPulse) * 0.35`). The video-mode brightness filter had been
-    // fed the RAW value with no smoothing at all, so the whole hero visibly
-    // flickered in time with the FFT's frame-to-frame noise instead of
-    // breathing with the music. Same lerp constant, applied once here so
-    // both consumers (iframe scene + video hook) see the same smoothed value.
-    let ampSmooth = 0;
-    function pumpAmp() {
-      requestAnimationFrame(pumpAmp);
-      if (!ready) return;
-      if (audio.paused) {
-        if (!waveCleared) {
-          waveCleared = true;
-          ampSmooth = 0;
-          if (waveCtx) waveCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
-          if (frame && frame.contentWindow) { try { frame.contentWindow.__heroAmp = 0; } catch (e) {} }
-          if (window.__heroVideoAmp) window.__heroVideoAmp(0);
-        }
-        return;
-      }
-      waveCleared = false;
-      let amp;
-      if (analyser) {
-        analyser.getByteFrequencyData(bytes);
-        const N = Math.floor(bytes.length * 0.66);
-        let s = 0; for (let i = 0; i < N; i++) s += bytes[i];
-        amp = s / (N * 255);
-      } else {
-        // touch: no analyser — feed a gentle synthetic pulse while playing so
-        // the hero's audio-reactive effects still breathe (no real FFT data).
-        amp = (!audio.paused)
-          ? (0.18 + 0.12 * Math.sin(performance.now() * 0.004)) * volume * 4
-          : 0;
-        amp = Math.max(0, Math.min(1, amp));
-      }
-      ampSmooth += (amp - ampSmooth) * 0.35;
-      if (frame && frame.contentWindow) {
-        try { frame.contentWindow.__heroAmp = ampSmooth; } catch (e) {}
-      }
-      if (window.__heroVideoAmp) window.__heroVideoAmp(ampSmooth);
-      drawWave();
-    }
-    requestAnimationFrame(pumpAmp);
-
-    /* ── ElasticSlider (vanilla port) ── */
-    const MAX_OVERFLOW = 50;
-    const decay = (v, max) => max === 0 ? 0 : (2 * (1 / (1 + Math.exp(-(v / max))) - 0.5)) * max;
-    let value = 25, overflow = 0, dragging = false, region = 'middle';
-
-    function syncRange() {
-      range.style.width = value + '%';
-      volume = Math.max(0, Math.min(1, value / 100));
-      if (gainNode) gainNode.gain.value = volume; else audio.volume = volume;
-    }
-    function syncTrack() {
-      const rect = root.getBoundingClientRect();
-      const sx = 1 + Math.abs(overflow) / Math.max(1, rect.width);
-      const sy = 1 - (Math.abs(overflow) / MAX_OVERFLOW) * 0.2;
-      trackwrap.style.transformOrigin = (region === 'left' ? 'right' : 'left') + ' center';
-      trackwrap.style.transform = `scaleX(${sx}) scaleY(${sy})`;
-    }
-    function syncIcons() {
-      const off = decay(Math.abs(overflow), MAX_OVERFLOW);
-      leftIcon.style.transform  = region === 'left'  ? `translateX(${-off}px) scale(1.25)` : 'translateX(0) scale(1)';
-      rightIcon.style.transform = region === 'right' ? `translateX(${ off}px) scale(1.25)` : 'translateX(0) scale(1)';
-    }
-    function onMove(e) {
-      const rect = root.getBoundingClientRect();
-      const x = e.clientX;
-      value = Math.max(0, Math.min(100, ((x - rect.left) / rect.width) * 100));
-      syncRange();
-      if (x < rect.left)       { region = 'left';   overflow = -decay(rect.left - x, MAX_OVERFLOW); }
-      else if (x > rect.right) { region = 'right';  overflow =  decay(x - rect.right, MAX_OVERFLOW); }
-      else                     { region = 'middle'; overflow = 0; }
-      syncTrack(); syncIcons();
-    }
-    function springBack() {
-      const start = overflow, t0 = performance.now(), dur = 360;
-      (function step(now) {
-        const t = Math.min(1, (now - t0) / dur);
-        overflow = start * (1 - (1 - Math.pow(1 - t, 3)));
-        syncTrack(); syncIcons();
-        if (t < 1) requestAnimationFrame(step);
-        else { overflow = 0; region = 'middle'; syncTrack(); syncIcons(); }
-      })(t0);
-    }
-    root.addEventListener('pointerdown', e => {
-      // before playback starts, a tap on the slider should START the music
-      // at the default volume — NOT drag the volume (which would otherwise
-      // jump to ~0 if you tap the left side, making it play silently).
-      if (!started) { e.stopPropagation(); unlock(); return; }
-      dragging = true; root.setPointerCapture(e.pointerId); onMove(e);
-    });
-    root.addEventListener('pointermove', e => { if (dragging) onMove(e); });
-    const endDrag = () => { if (dragging) { dragging = false; springBack(); } };
-    root.addEventListener('pointerup', endDrag);
-    root.addEventListener('pointercancel', endDrag);
-    root.addEventListener('lostpointercapture', endDrag);
-    wrapper.addEventListener('pointerenter', () => wrapper.classList.add('is-hover'));
-    wrapper.addEventListener('pointerleave', () => wrapper.classList.remove('is-hover'));
-
-    function refreshIcons() {
-      const playing = !audio.paused;
-      iconPlay.style.display  = playing ? 'none' : 'block';
-      iconPause.style.display = playing ? 'block' : 'none';
-    }
-    toggleBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (!ready) buildGraph();
-      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-      if (audio.paused) audio.play().catch(() => {}); else audio.pause();
-      refreshIcons();
-    });
-    audio.addEventListener('play',  refreshIcons);
-    audio.addEventListener('pause', refreshIcons);
-
-    // ── track switcher: cycles through TRACKS. createMediaElementSource
-    // binds to the <audio> ELEMENT, not a specific file, so swapping .src
-    // and calling .load() keeps flowing through the same analyser/gain
-    // graph — no need to rebuild anything on switch.
-    let trackIndex = TRACKS.findIndex(t => t.src === audio.getAttribute('src'));
-    if (trackIndex < 0) trackIndex = 0;
-    function trackLabel(t) {
-      if (t.name) return t.name;
-      return t.src.split('/').pop().replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
-    }
-    function applyTrack(i) {
-      const wasPlaying = !audio.paused;
-      trackIndex = ((i % TRACKS.length) + TRACKS.length) % TRACKS.length;
-      audio.src = TRACKS[trackIndex].src;
-      audio.load();
-      if (wasPlaying) audio.play().catch(() => {});
-      // button label stays static ("bg music") regardless of which track
-      // is playing — the checkmark in the open menu shows the real pick.
-    }
-    const trackDD = document.getElementById('track-dd');
-    if (trackBtn && trackDD) {
-      // explicit 'flex' (not '' ) — the CSS default for #track-dd is
-      // display:none, and clearing an inline style falls back to THAT,
-      // not to .dd's display:inline-flex rule (same specificity, later
-      // in source order wins the cascade either way).
-      trackDD.style.display = TRACKS.length > 1 ? 'flex' : 'none';
-      setupDropdown('track-dd', 'track-dd-menu',
-        TRACKS.map((t) => ({ label: trackLabel(t) })),
-        () => trackIndex,
-        (i) => applyTrack(i));
-    }
-    if (trackName) trackName.textContent = 'bg music';
-
-    syncRange();
-    refreshIcons();
-  })();
 </script>
 
 </body>
