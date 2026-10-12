@@ -462,6 +462,9 @@
     // negative = slide the composition RIGHT on screen (touch-only optical
     // centering fix; see the camera block in tick)
     const CAM_X_SHIFT = TOUCH_DEVICE ? -0.3 : 0;
+    // ?poke=0 only: pk letters' center sits this fraction of frame height
+    // above frame center (room for the page's tagline underneath)
+    const PK_LIFT = 0.06;
     const _camTarget = new THREE.Vector3();
 
     // click → raycast Rayquaza. The parent (which owns pointer events,
@@ -4431,6 +4434,22 @@
       // direction.
       camera.position.set(modelCenter.x + CAM_X_SHIFT, modelCenter.y + 4, modelCenter.z + CAM_DIST);
       _camTarget.set(modelCenter.x + CAM_X_SHIFT, modelCenter.y, modelCenter.z);
+      if (NO_POKE) {
+        // ?poke=0: no creature to balance against, and the page sets an
+        // HTML tagline under the pk, so frame the letters themselves and
+        // lift them PK_LIFT of frame height above center. pkText is
+        // geo.center()'d at modelCenter, so its bounds center IS
+        // modelCenter: drop the touch optical X shift, then slide camera
+        // + target together along the camera's up vector (view direction
+        // unchanged). Up for this view is (0, CAM_DIST, -4)/depth and the
+        // needed slide is lift*2 (NDC) * depth * tan(fov/2), so depth
+        // cancels. Base fov 38, not the music-breathed one: the framing
+        // must not bob with the beat.
+        const k = PK_LIFT * 2 * Math.tan(THREE.MathUtils.degToRad(38 / 2));
+        camera.position.x -= CAM_X_SHIFT; _camTarget.x -= CAM_X_SHIFT;
+        camera.position.y -= k * CAM_DIST; _camTarget.y -= k * CAM_DIST;
+        camera.position.z += k * 4;        _camTarget.z += k * 4;
+      }
       camera.lookAt(_camTarget);
 
       // (audio-reactive bloom pulse REMOVED along with UnrealBloomPass —
