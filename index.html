@@ -1459,12 +1459,6 @@
       text-shadow: 0 1px 6px rgba(0,0,0,0.85);
       pointer-events: none;
     }
-    /* light screenshots: flip the caption so it stays legible */
-    .case-media figure.is-light figcaption {
-      color: rgba(0,0,0,0.62);
-      text-shadow: 0 1px 6px rgba(255,255,255,0.9);
-    }
-
     .case-tags {
       display: flex;
       flex-wrap: wrap;
@@ -2688,12 +2682,12 @@
         'Every finished application keeps a record of exactly what was submitted, field by field. 100 applications for $50, no subscription. Live at <a href="https://holecard.me" target="_blank" rel="noopener noreferrer">holecard.me</a>.'
       ],
       images: [
-        { src: 'holecard/landing.webp',    layout: 'hero',  alt: 'holecard landing page',                         caption: 'holecard.me · landing'       },
-        { src: 'holecard/apply.mp4',       light: true,  poster: 'holecard/apply-poster.jpg', alt: 'agent filling a greenhouse application', caption: 'live agent · greenhouse apply' },
-        { src: 'holecard/dashboard.webp',  layout: 'wide',  alt: 'applications dashboard',                        caption: 'dashboard · all applications' },
-        { src: 'holecard/onboarding.webp', layout: 'tall',  alt: 'onboarding step, home address',                 caption: 'onboarding'                  },
-        { src: 'holecard/record.webp',     layout: 'half',  alt: 'submitted application record, field by field', caption: 'record · what was sent'      },
-        { src: 'holecard/forwarding.webp', layout: 'half',  alt: 'email forwarding setup',                        caption: 'forwarding · codes and links' }
+        { src: 'holecard/landing.webp',                                                     alt: 'holecard landing page',                         caption: 'holecard.me · landing'        },
+        { src: 'holecard/apply.mp4',       poster: 'holecard/apply-poster.jpg', alt: 'agent filling a greenhouse application' },
+        { src: 'holecard/dashboard.webp',  layout: 'half',                                  alt: 'applications dashboard',                        caption: 'dashboard · all applications'  },
+        { src: 'holecard/review.webp',     layout: 'half',                                  alt: 'application held for review before sending',   caption: 'review · approve and send'     },
+        { src: 'holecard/onboarding.webp', layout: 'half',                                  alt: 'onboarding step, home address',                 caption: 'onboarding'                    },
+        { src: 'holecard/forwarding.webp', layout: 'half',                                  alt: 'email forwarding setup',                        caption: 'forwarding · codes and links'  }
       ],
       tags: ['Python', 'Next.js', 'TypeScript', 'Supabase', 'Chromium', 'Vision models', 'Docker', 'Azure'],
       meta: {
@@ -2803,13 +2797,13 @@
         'The finding: message grounding, not channel capacity, is the binding constraint for communication-aided dropout robustness. Read the <a href="rware/paper.pdf" target="_blank" rel="noopener noreferrer">full paper (PDF)</a> or the <a href="https://github.com/pk-code-pk/CS2860-Project" target="_blank" rel="noopener noreferrer">code</a>.'
       ],
       images: [
-        { src: 'rware/results.webp', layout: 'wide', light: true, alt: 'evaluation return under targeted dropout: no comm, learned comm, intent-grounded comm', caption: 'targeted dropout · grounded comm wins' },
-        { src: 'rware/demo.mp4',     layout: 'tall', light: true, poster: 'rware/demo-poster.jpg', alt: 'trained agents in rware with one agent dropping out mid-episode', caption: 'rware tiny-4ag · agent 0 drops' },
-        { src: 'rware/term-train.webp',                           alt: 'terminal: MAPPO training run on rware',                                 caption: 'training · mappo on rware'      },
-        { src: 'rware/term-dropout.webp',                         alt: 'terminal: per-step rollout trace around the dropout moment',                caption: 'rollout · the dropout moment'   },
-        { src: 'rware/paper-title.webp',  layout: 'half', light: true, alt: 'paper title page and abstract',                                        caption: 'paper · abstract'               },
-        { src: 'rware/paper-fig1.webp',   layout: 'half', light: true, alt: 'fig 1: training and evaluation curves for comm-mappo',                 caption: 'fig 1 · comm-mappo curves'      },
-        { src: 'rware/paper-table5.webp',                 light: true, alt: 'table v and fig 5: gcomm-mappo results under targeted dropout',       caption: 'table v · fig 5 · gcomm-mappo'  }
+        { src: 'rware/results.webp',      layout: 'wide',                                  alt: 'evaluation return under targeted dropout: no comm, learned comm, intent-grounded comm' },
+        { src: 'rware/demo.mp4',          layout: 'tall', poster: 'rware/demo-poster.jpg', alt: 'trained agents in rware with one agent dropping out mid-episode' },
+        { src: 'rware/term-dropout.webp',                                                               alt: 'terminal: per-step rollout trace around the dropout moment',                             caption: 'rollout · the dropout moment'          },
+        { src: 'rware/term-train.webp',                                                                 alt: 'terminal: MAPPO training run on rware',                                                  caption: 'training · mappo on rware'             },
+        { src: 'rware/paper-title.webp',  layout: 'half',                                  alt: 'paper title page and abstract' },
+        { src: 'rware/paper-fig1.webp',   layout: 'half',                                  alt: 'fig 1: training and evaluation curves for comm-mappo' },
+        { src: 'rware/paper-table5.webp',                                                  alt: 'table v and fig 5: gcomm-mappo results under targeted dropout' }
       ],
       tags: ['Python', 'PyTorch', 'MAPPO', 'RIAL', 'RWARE', 'uv'],
       meta: {
@@ -2984,7 +2978,7 @@
     document.getElementById('case-media').innerHTML = media.map(item => {
       const img = (typeof item === 'string') ? { src: item } : (item || {});
       if (!img.src) return '';
-      const layoutClass = (img.layout ? ` is-${img.layout}` : '') + (img.light ? ' is-light' : '');
+      const layoutClass = img.layout ? ` is-${img.layout}` : '';
       const cap = img.caption ? `<figcaption>${img.caption}</figcaption>` : '';
       // .mp4 entries render as a muted looping clip; poster shows until it plays.
       if (/\.mp4$/i.test(img.src)) {
