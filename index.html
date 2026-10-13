@@ -507,7 +507,8 @@
       position: absolute; width: min(250px, 46vw); padding: 10px 14px 9px;
       border-radius: 16px;
     }
-    .bt-foe { top: calc(var(--nav-h) + 20px); right: max(16px, 5vw); }
+    /* --bt-top: the nav pill's measured bottom + a gap (set by the player) */
+    .bt-foe { top: var(--bt-top, calc(var(--nav-h) + 28px)); right: max(16px, 5vw); }
     .bt-me  { bottom: 168px; left: max(16px, 5vw); }
     .bt-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
     .bt-name { font-weight: 700; font-size: 14px; letter-spacing: .04em; }
@@ -530,7 +531,7 @@
       width: min(560px, calc(100% - 32px)); padding: 14px 16px 14px;
       border-radius: 20px; pointer-events: auto;
     }
-    .bt-text { margin: 0 2px 12px; min-height: 1.5em; font-weight: 500; font-size: 15px;
+    .bt-text { margin: 0 34px 12px 2px; min-height: 1.5em; font-weight: 500; font-size: 15px;
                line-height: 1.5; letter-spacing: .01em; }
     .bt-acts { display: flex; gap: 8px; }
     .bt-acts[hidden] { display: none; }
@@ -549,19 +550,19 @@
     .bt-acts .bt-run { flex: 0 0 auto; justify-content: center; text-align: center; color: rgba(255,255,255,.7); }
     .bt-acts button[data-m="1"] small { color: #7af0d6; }
     .bt-acts button[data-m="2"] small { color: #ffc27a; }
+    /* mute sits in the box's top-right corner, beside the text line */
     .bt-mute {
-      position: absolute; top: calc(var(--nav-h) + 20px); left: max(16px, 5vw);
-      width: 38px; height: 38px; border-radius: 999px; padding: 0; cursor: pointer;
-      display: grid; place-items: center; color: rgba(255,255,255,.8); pointer-events: auto;
-      transition: color .2s, transform .15s;
+      position: absolute; top: 8px; right: 8px;
+      width: 32px; height: 32px; border-radius: 999px; padding: 0; cursor: pointer;
+      display: grid; place-items: center; background: none; border: 0;
+      color: rgba(255,255,255,.6); transition: color .2s, background .2s;
     }
-    .bt-mute:hover { color: #fff; transform: scale(1.06); }
-    .bt-mute svg { width: 17px; height: 17px; }
+    .bt-mute:hover { color: #fff; background: rgba(255,255,255,.08); }
+    .bt-mute svg { width: 16px; height: 16px; }
     .bt-mute .bt-x { display: none; }
     .bt-mute.is-muted .bt-x { display: inline; }
     .bt-mute.is-muted .bt-wave { display: none; }
     @media (orientation: portrait) {
-      .bt-mute { left: auto; right: 16px; }
       .bt-foe { left: 16px; right: auto; }
       .bt-me  { right: 16px; left: auto; bottom: 178px; }
     }
@@ -2019,9 +2020,6 @@
   <!-- hidden battle overlay (see the BATTLE controller near the video
        hero script); inert until the konami code or 5 quick taps on the pk -->
   <div class="bt" id="bt" hidden>
-    <button class="bt-mute bt-glass" id="bt-mute" data-act="mute" aria-label="mute battle sound">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="bt-wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/><path class="bt-x" d="M16 9l5 6M21 9l-5 6"/></svg>
-    </button>
     <div class="bt-card bt-glass bt-foe" aria-label="lugia">
       <div class="bt-row"><span class="bt-name">lugia</span><span class="bt-lv">lv 70</span></div>
       <div class="bt-hp"><i id="bt-hp-lug"></i></div>
@@ -2033,6 +2031,9 @@
       <div class="bt-num"><span id="bt-num-ray">100</span> / 100</div>
     </div>
     <div class="bt-box bt-glass">
+      <button class="bt-mute" id="bt-mute" data-act="mute" aria-label="mute battle sound">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="bt-wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/><path class="bt-x" d="M16 9l5 6M21 9l-5 6"/></svg>
+      </button>
       <p class="bt-text" id="bt-text" aria-live="polite"></p>
       <div class="bt-acts" id="bt-moves" hidden>
         <button data-m="1">dragon pulse<small>dragon</small></button>
@@ -4192,8 +4193,17 @@
         menu();
       }
 
+      // keep the foe card clear of the floating nav, whatever its height
+      function layout() {
+        const nav = document.querySelector('nav');
+        const r = nav && nav.getBoundingClientRect();
+        root.style.setProperty('--bt-top', `${Math.round(r && r.height ? r.bottom + 12 : 76)}px`);
+      }
+      addEventListener('resize', () => { if (active) layout(); });
+
       async function start() {
         if (active) return;
+        layout();
         if (heroEl.classList.contains('mode-live')) setMode(false);
         active = true; epoch++;
         root.hidden = false;
@@ -4339,7 +4349,7 @@
         lastTap = now;
         if (taps >= 5) { taps = 0; start(); }
       }, { passive: true });
-      window.__battle = { start, exit, sound };   // console handle
+      window.__battle = { start, exit, sound, layout };   // console handle
     })();
 
     function installHooks() {
