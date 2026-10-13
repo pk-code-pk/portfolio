@@ -451,7 +451,7 @@
       backface-visibility: hidden;
     }
 
-    /* ─── hero bar: the easter-egg toggle (+ live 3d on desktop). Lives in
+    /* ─── hero bar: battle button, the easter-egg toggle (+ live 3d on desktop). Lives in
        the PARENT; the visual iframe is pointer-events:none. ─── */
     #hero-bar {
       position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
@@ -468,7 +468,7 @@
     }
     /* fade the bar out once you scroll past the hero */
     #hero-bar.is-hidden { opacity: 0; pointer-events: none; }
-    #egg-toggle, #live-toggle {
+    #battle-toggle, #egg-toggle, #live-toggle {
       background: none; border: none; padding: 4px 8px;
       color: rgba(255,255,255,0.8); cursor: pointer;
       display: flex; align-items: center; gap: 7px;
@@ -476,8 +476,8 @@
       letter-spacing: .14em; text-transform: lowercase; white-space: nowrap;
       transition: color .25s, transform .2s;
     }
-    #egg-toggle:hover, #live-toggle:hover { color: #fff; transform: scale(1.06); }
-    #egg-toggle svg, #live-toggle svg { width: 15px; height: 15px; display: block; }
+    #battle-toggle:hover, #egg-toggle:hover, #live-toggle:hover { color: #fff; transform: scale(1.06); }
+    #battle-toggle svg, #egg-toggle svg, #live-toggle svg { width: 15px; height: 15px; display: block; }
     @media (max-width: 480px) {
       #hero-bar { bottom: 16px; }
     }
@@ -2055,6 +2055,10 @@
 <!-- hero bar: easter egg (cycles the baked hero: no creature → rayquaza →
      gyarados) + the desktop-only live-3d opt-in -->
 <div id="hero-bar">
+  <button id="battle-toggle" aria-label="Battle Lugia" title="Battle">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>
+    <span class="poke-name">battle</span>
+  </button>
   <button id="egg-toggle" aria-label="Switch pokemon" title="?">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h6m6 0h6"/><circle cx="12" cy="12" r="3"/></svg>
     <span class="poke-name" id="egg-name">pkmn</span>
@@ -4388,6 +4392,9 @@
         lastTap = now;
         if (taps >= 5) { taps = 0; start(); }
       }, { passive: true });
+      // the hero bar's battle button (a click is a gesture, so audio starts)
+      const battleBtn = document.getElementById('battle-toggle');
+      if (battleBtn) battleBtn.addEventListener('click', () => { if (!active) start(); });
       window.__battle = { start, exit, sound, layout };   // console handle
     })();
 
