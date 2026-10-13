@@ -3796,7 +3796,10 @@
       if (!root) return;
       const $ = (id) => document.getElementById(id);
       const textEl = $('bt-text'), movesEl = $('bt-moves'), endEl = $('bt-end');
-      const bsrc = (name) => `hero-video/battle/${name}-${ORIENT}${EXT}`;
+      // clips stream from Cloudflare R2 (free egress); the same files stay
+      // in the repo as a fallback if R2 errors. Bump v1 on a re-bake.
+      const R2 = 'https://pub-52095d8d2d4e49ae91b1096797737410.r2.dev/v1/';
+      const bsrc = (name, local) => `${local ? 'hero-video/battle/' : R2}${name}-${ORIENT}${EXT}`;
       // when each move's shot lands (clip seconds), from the scene's MOVES
       const HIT = { 'ray-m1': 1.2, 'ray-m2': 1.0, 'lug-m1': 1.15, 'lug-m2': 1.2 };
       const NAMES = { 'ray-m1': 'dragon pulse', 'ray-m2': 'hyper beam', 'lug-m1': 'aeroblast', 'lug-m2': 'hydro pump' };
@@ -4071,7 +4074,13 @@
         // may not buffer preload=auto media until play(), so never wait on
         // loadeddata alone
         el.ready = new Promise((res) => {
-          for (const ev of ['loadeddata', 'canplay', 'error']) el.addEventListener(ev, res, { once: true });
+          for (const ev of ['loadeddata', 'canplay']) el.addEventListener(ev, res, { once: true });
+          // R2 failed: retry once from the repo copy before giving up
+          let local = false;
+          el.addEventListener('error', () => {
+            if (local) return res();
+            local = true; el.src = bsrc(name, true); el.load();
+          });
           setTimeout(res, 5000);
         });
         el.src = bsrc(name);
