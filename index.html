@@ -572,6 +572,9 @@
       .bt-acts { gap: 6px; }
       .bt-acts button { padding: 9px 10px; font-size: 12px; }
       .bt-card { width: 150px; padding: 7px 10px 6px; border-radius: 13px; }
+      /* phones: Rayquaza fills the lower middle, so its card drops to sit
+         just above the box, on the side away from its tail */
+      .bt-me { bottom: 134px; }
       .bt-hp { margin: 6px 0 4px; height: 5px; }
       .bt-name { font-size: 12px; }
       .bt-lv, .bt-num { font-size: 10px; }
@@ -4244,6 +4247,10 @@
 
       async function start() {
         if (active) return;
+        // the konami arrows scroll the page; the overlay is anchored to
+        // the hero, so bring it back to the top (instantly when it is
+        // only nudged, smoothly from further down)
+        if (scrollY > 0) window.scrollTo({ top: 0, behavior: scrollY < innerHeight ? 'instant' : 'smooth' });
         layout();
         if (heroEl.classList.contains('mode-live')) setMode(false);
         active = true; epoch++;
@@ -4371,16 +4378,17 @@
       });
 
       // ── triggers ──
-      const heroInView = () => heroEl.getBoundingClientRect().bottom > innerHeight * 0.5;
       const KONAMI = ['arrowup', 'arrowup', 'arrowdown', 'arrowdown', 'arrowleft', 'arrowright', 'arrowleft', 'arrowright', 'b', 'a'];
       let kpos = 0;
       document.addEventListener('keydown', (e) => {
         const k = (e.key || '').toLowerCase();
+        // once the code is underway (up, up), its down presses must not
+        // scroll the page: the battle overlay is anchored to the hero
+        if (kpos >= 2 && k === KONAMI[kpos] && k === 'arrowdown') e.preventDefault();
         kpos = k === KONAMI[kpos] ? kpos + 1 : (k === KONAMI[0] ? 1 : 0);
         if (kpos === KONAMI.length) {
           kpos = 0;
           if (active) return;
-          if (!heroInView()) window.scrollTo({ top: 0, behavior: 'smooth' });
           start();
         }
       });
