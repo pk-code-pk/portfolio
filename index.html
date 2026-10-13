@@ -4093,14 +4093,17 @@
       }
       // fade: crossfade in (entering / leaving the battle); otherwise a
       // hard cut, which is invisible because the frames line up
-      async function show(name, fade) {
+      // soft: a load failure returns 'broken' instead of ending the battle,
+      // so the caller can try another clip
+      async function show(name, fade, soft) {
         const el = get(name), my = epoch;
         await el.ready;
         if (my !== epoch) return false;
-        if (broken(el)) { bail(); return false; }
+        if (broken(el)) { drop(el); if (soft) return 'broken'; bail(); return false; }
         el.shown = true;
         el.loop = LOOPS.test(name);
-        try { el.currentTime = 0; } catch (e) {}
+        // only seek if needed: a seek drops readyState until it lands
+        if (el.currentTime !== 0) try { el.currentTime = 0; } catch (e) {}
         el.style.zIndex = String(++z);
         el.classList.toggle('cut', !fade);
         el.classList.add('on');
@@ -4311,9 +4314,17 @@
         if (!await ends(cur)) return;            // the idle hands off at its wrap
         for (const [i, a] of hits.entries()) {
           if (i) say(`${WHO[a.who]} used ${NAMES[a.move]}!`);
-          if (!await show(`${a.move}-s${a.from}`, false)) return;
-          sound.move(cur, a.move, a.to, alive);
-          if (!await at(cur, HIT[a.move])) return;
+          let move = a.move, r = await show(`${move}-s${a.from}`, false, true);
+          if (r === 'broken') {
+            // that clip will not load: the same attacker's other move at
+            // this stage carries the identical outcome (bails if it fails too)
+            move = a.move.replace(/m([12])$/, (_, n) => `m${3 - n}`);
+            say(`${WHO[a.who]} used ${NAMES[move]}!`);
+            r = await show(`${move}-s${a.from}`, false);
+          }
+          if (!r) return;
+          sound.move(cur, move, a.to, alive);
+          if (!await at(cur, HIT[move])) return;
           st[a.def] = a.hp; setHp(a.def, a.hp);
           if (a.crit) say('a critical hit!');
           if (!await ends(cur)) return;

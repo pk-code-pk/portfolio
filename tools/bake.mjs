@@ -29,7 +29,7 @@
           ANGLE=<backend> GL backend (default metal on macOS, swiftshader
                           elsewhere; capture is deterministic either way)
 */
-import { access, mkdir, rm, statfs } from 'node:fs/promises';
+import { access, mkdir, rename, rm, statfs } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { cpus } from 'node:os';
 import puppeteer from 'puppeteer';
@@ -210,13 +210,16 @@ function battleClips() {
 
 async function encodeBattle(name, inter) {
   const T = '3';
-  const o = `${BATTLE_DIR}/${name}`;
+  // renditions encode into work/ (same volume) and are renamed over the
+  // finals when done: a live site never sees a missing or half-written clip
+  const o = `${SCRATCH}/${name}`;
   await run('ffmpeg', ['-y', '-i', inter, '-c:v', 'libx264', '-crf', '20', '-preset', 'slow', '-pix_fmt', 'yuv420p',
     '-profile:v', 'high', '-threads', T, '-movflags', '+faststart', '-an', `${o}.mp4`], true);
   await run('ffmpeg', ['-y', '-i', inter, '-c:v', 'libx265', '-crf', '23', '-preset', 'fast', '-pix_fmt', 'yuv420p10le',
     '-tag:v', 'hvc1', '-x265-params', `aq-mode=3:pools=${T}:log-level=error`, '-movflags', '+faststart', '-an', `${o}.hevc.mp4`], true);
   await run('ffmpeg', ['-y', '-i', inter, '-c:v', 'libvpx-vp9', '-crf', '34', '-b:v', '0', '-pix_fmt', 'yuv420p10le',
     '-row-mt', '1', '-threads', T, '-deadline', 'good', '-cpu-used', '4', '-an', `${o}.webm`], true);
+  for (const x of ['.mp4', '.hevc.mp4', '.webm']) await rename(`${o}${x}`, `${BATTLE_DIR}/${name}${x}`);
   await rm(inter, { force: true });
   console.log(`  ${name}: encoded`);
 }
