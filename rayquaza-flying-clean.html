@@ -3405,8 +3405,17 @@
       const beamMat = (kind) => new THREE.ShaderMaterial({
         uniforms: { uCore: { value: new THREE.Color() }, uEdge: { value: new THREE.Color() }, uTime: { value: 0 },
                     uInt: { value: 0 }, uKind: { value: kind }, uLen: { value: 1 } },
-        vertexShader: `varying vec2 vUv; varying vec3 vN; varying vec3 vV;
-          void main(){ vUv = uv; vec4 mv = modelViewMatrix * vec4(position,1.0);
+        vertexShader: `uniform float uKind; uniform float uTime; uniform float uLen;
+          varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+          void main(){ vUv = uv; vec3 p = position;
+            if (uKind > 2.5) {
+              // water jet: flares toward the target and churns along its length
+              float a = atan(p.z, p.x), y = p.y * uLen;
+              float w = 1.0 + 0.24 * sin(y * 0.9 - uTime * 24.0 + a * 3.0) + 0.13 * sin(y * 2.3 - uTime * 41.0 - a * 5.0)
+                      + 0.08 * sin(y * 5.1 - uTime * 63.0 + a * 7.0);
+              p.xz *= w * mix(0.7, 1.3, p.y);
+            }
+            vec4 mv = modelViewMatrix * vec4(p,1.0);
             vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
         fragmentShader: `uniform vec3 uCore; uniform vec3 uEdge; uniform float uTime; uniform float uInt;
           uniform float uKind; uniform float uLen; varying vec2 vUv; varying vec3 vN; varying vec3 vV;
@@ -3415,7 +3424,17 @@
             float along = vUv.y * uLen;
             float n = 0.5 + 0.5 * sin(along * 2.3 - uTime * 38.0 + vUv.x * 18.85)
                     * sin(along * 0.9 - uTime * 21.0 - vUv.x * 12.57);
-            if (uKind > 2.5) n = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(along * 5.0 - uTime * 60.0 + sin(vUv.x * 25.1) * 1.6), 2.0);
+            if (uKind > 2.5) {
+              // water: no glowing core, a soft-edged white-cyan body with
+              // fast froth streaks, drawn with normal blending so it reads
+              // as liquid rather than light
+              float froth = (0.5 + 0.5 * sin(along * 3.1 - uTime * 55.0 + sin(vUv.x * 31.4 + uTime * 9.0) * 2.0))
+                          * (0.5 + 0.5 * sin(along * 7.3 - uTime * 80.0 + vUv.x * 18.85));
+              float body = smoothstep(0.0, 0.6, f);
+              vec3 wc = mix(uEdge, vec3(0.93, 0.98, 1.0), 0.35 + 0.65 * clamp(froth * 1.4 + (1.0 - f) * 0.4, 0.0, 1.0));
+              gl_FragColor = vec4(wc, body * (0.5 + 0.5 * froth) * uInt);
+              return;
+            }
             float core = pow(f, 3.0);
             vec3 col = mix(uEdge * (0.55 + 0.6 * n), uCore, core);
             float a = (pow(f, 1.2) * (0.65 + 0.35 * n)) * uInt;
@@ -3452,6 +3471,7 @@
         return o;
       }
       const beams = { dp: makeBeam(1, false), hb: makeBeam(2, false), ab: makeBeam(1, true), hp: makeBeam(3, false) };
+      beams.hp.m.blending = THREE.NormalBlending;
       const orb = new THREE.Mesh(orbGeo, beamMat(1)); orb.visible = false; orb.renderOrder = 16; orb.frustumCulled = false; fxRoot.add(orb);
       const glows = Array.from({ length: 6 }, makeGlow);
       const flashLight = new THREE.PointLight(0xffffff, 0, 80, 1.6); scene.add(flashLight);
@@ -3513,7 +3533,7 @@
         'ray-m1': { name: 'dragon pulse', beam: 'dp', core: 0xd8fff4, edge: 0x2be3c0, edge2: 0x8b5cff, tFire: 0.72, tPk: 0.98, tHit: 1.2, tOff: 1.7, r: 1.0, orb: true },
         'ray-m2': { name: 'hyper beam',   beam: 'hb', core: 0xfff6e0, edge: 0xff7a1a, edge2: 0xffd27a, tFire: 0.8,  tPk: 0.9,  tHit: 1.0, tOff: 1.85, r: 1.35, charge: true },
         'lug-m1': { name: 'aeroblast',    beam: 'ab', core: 0xe6eeff, edge: 0x4a6dff, edge2: 0xb8c8ff, tFire: 0.8,  tPk: 0.98, tHit: 1.15, tOff: 1.9, r: 0.9 },
-        'lug-m2': { name: 'hydro pump',   beam: 'hp', core: 0xbfe8ff, edge: 0x1266ff, edge2: 0x7fd0ff, tFire: 0.85, tPk: 1.02, tHit: 1.2, tOff: 1.8, r: 1.1, spray: true },
+        'lug-m2': { name: 'hydro pump',   beam: 'hp', core: 0xdff6ff, edge: 0x5fc8ff, edge2: 0xbfeaff, tFire: 0.85, tPk: 1.02, tHit: 1.2, tOff: 1.8, r: 1.6, water: true },
       };
 
       /* ── clip state ─────────────────────────────────────────────────── */
@@ -3527,9 +3547,12 @@
       const tmpA = V(0, 0, 0), tmpB = V(0, 0, 0), mouth = V(0, 0, 0), target = V(0, 0, 0), pkHit = V(0, 0, 0);
       let shake = 0;
 
-      function blink(mats, on) {
+      // hit flicker: a short partial tint added on top of the lit surface
+      // (shading stays readable), not a white-out
+      const _tint = new THREE.Color();
+      function blink(mats, on, col) {
         mats.forEach(({ m, e, i }) => {
-          if (on > 0) { m.emissive.setRGB(1, 1, 1); m.emissiveIntensity = on * 0.9; }
+          if (on > 0.001) { m.emissive.copy(e).lerp(_tint.set(col), 1); m.emissiveIntensity = on; }
           else { m.emissive.copy(e); m.emissiveIntensity = i; }
         });
       }
@@ -3615,7 +3638,7 @@
         if (!lug) return;
         const tau = tAbs - BT_T0;
         pN = 0; shake = 0;
-        let rqOff = V(0, 0, 0), rqRot = V(0, 0, 0), rqAct = {}, rqVis = true, rqBlink = 0;
+        let rqOff = V(0, 0, 0), rqRot = V(0, 0, 0), rqAct = {}, rqVis = true, rqBlink = 0, blinkCol = 0xffffff;
         let lugOff = V(0, 0, 0), lugRot = V(0, 0, 0), lugList = [lugIdle(tau)], lugVis = true, lugBlink = 0;
         let flash = 0, flashCol = 0xffffff, light = 0, lightCol = 0xffffff;
         Object.values(beams).forEach(b => { b.segs.forEach(s => s.visible = false); b.hel.forEach(h => h.visible = false); });
@@ -3679,25 +3702,26 @@
           // defender reaction
           const hitT = tau - mv.tHit;
           const react = hitT > 0 ? Math.exp(-hitT * 2.2) * Math.min(1, hitT * 14) * (1 - smooth(win(hitT, 1.4, 2.2))) : 0;
-          const blinkOn = hitT > 0 && hitT < 0.75 && Math.floor(hitT * 12) % 2 === 0 ? 1 : 0;
+          // ~150ms pulse at the hit, then one fainter echo, like the games' flicker
+          const blinkOn = 0.42 * bump(hitT, 0, 0.03, 0.15) + 0.2 * bump(hitT, 0.22, 0.26, 0.36);
           if (rayAtk) {
             const dmg = mv.beam === 'hb' ? 'damage02' : 'damage01';
             const dd = clipLen[dmg];
             const wD = hitT > 0 ? smooth(hitT / 0.08) * (1 - smooth((hitT - dd + 0.3) / 0.3)) : 0;
             lugList = [lugIdle(tau, 1 - wD + 1e-3), [dmg, Math.max(0, hitT), wD]];
             lugOff.set(3.2 * react, 0.6 * react, -1.6 * react);
-            lugBlink = blinkOn;
+            lugBlink = blinkOn; blinkCol = mv.edge2;
           } else {
             rqOff.set(-3.4 * react, -0.6 * react, 0.8 * react);
             rqRot.z = -0.25 * react;
             rqAct = { spasm: react, jaw: 0.4 * react, headX: 0.3 * react };
-            rqBlink = blinkOn;
+            rqBlink = blinkOn; blinkCol = mv.edge2;
           }
 
           // ── the shot ──
           // mouth / target come from the posed rigs, so pose those first
-          applyRay(tau, rqOff, rqRot, rqAct, rqVis, rqBlink);
-          applyLug(tau, lugOff, lugRot, lugList, lugVis, lugBlink);
+          applyRay(tau, rqOff, rqRot, rqAct, rqVis, rqBlink, blinkCol);
+          applyLug(tau, lugOff, lugRot, lugList, lugVis, lugBlink, blinkCol);
           if (rayAtk) { headPoint(mouth); lugBody(target); } else { lugMouth(mouth); rayBody(target); }
           pkHit.copy(IMPACT[Math.min(to, BT_STAGES)]).add(PK);
           if (stage >= BT_STAGES) pkHit.copy(PK).add(V(0, 0.5, 0));
@@ -3708,7 +3732,7 @@
           const B = beams[mv.beam];
           B.m.uniforms.uCore.value.set(mv.core); B.m.uniforms.uEdge.value.set(mv.edge);
           B.m.uniforms.uTime.value = tau; B.m.uniforms.uInt.value = on * (mv.beam === 'hb' ? 1.3 : mv.beam === 'dp' ? 1.1 : 0.7);
-          const R = mv.r * (1 + 0.12 * Math.sin(tau * 47)) * (mv.beam === 'hp' ? 1 + 0.18 * Math.sin(tau * 31 + 1) : 1);
+          const R = mv.r * (mv.water ? 1 : 1 + 0.12 * Math.sin(tau * 47));
           const tip = V(0, 0, 0);
           if (mv.orb) {
             // dragon pulse: an orb flies the path, the beam is its trail
@@ -3736,11 +3760,19 @@
               if (reach > len1) { h.quaternion.setFromUnitVectors(_up, _d.subVectors(target, mouth).normalize()); h.scale.y = mouth.distanceTo(target) * Math.min(1, reach / (len1 + len2)); }
               h.rotateY(tau * (i ? -14 : 11) + i * 1.3);
             });
-            const g = glows[2]; g.visible = true; g.position.copy(mouth); g.scale.setScalar(4.2 * R + 0.8 * Math.sin(tau * 30)); g.material.color.set(mv.edge); g.material.opacity = on;
-            if (mv.spray) {
-              emit({ seed: 21, n: 700, t0: mv.tFire, t1: mv.tOff, life: 0.5, tau,
-                at: (u) => tmpB.lerpVectors(mouth, reach <= len1 ? tip : target, u * Math.min(1, reach / (len1 + len2))).clone(),
-                vel: (r) => V(r() - 0.5, r() - 0.3, r() - 0.5).multiplyScalar(9), col: 0xbfe6ff, col2: mv.edge, size: 0.8, grav: 9, drag: 1.5 });
+            const g = glows[2]; g.visible = true; g.position.copy(mouth);
+            g.scale.setScalar(mv.water ? 2.6 * R : 4.2 * R + 0.8 * Math.sin(tau * 30)); g.material.color.set(mv.edge); g.material.opacity = on * (mv.water ? 0.35 : 1);
+            if (mv.water) {
+              const far = reach <= len1 ? tip : target, frac = Math.min(1, reach / (len1 + len2));
+              const along = (u) => tmpB.lerpVectors(mouth, far, u * frac).clone();
+              // froth peeling off the jet
+              emit({ seed: 21, n: 900, t0: mv.tFire, t1: mv.tOff, life: 0.35, tau, at: along,
+                vel: (r) => V(r() - 0.5, r() - 0.5, r() - 0.5).normalize().multiplyScalar(3 + 4 * r()),
+                col: 0xffffff, col2: 0xcff0ff, size: 1.3, drag: 3, alpha: 0.8 });
+              // droplets thrown up and out that arc and fall
+              emit({ seed: 22, n: 520, t0: mv.tFire, t1: mv.tOff, life: 1.1, tau, at: along,
+                vel: (r) => V((r() - 0.5) * 9, 4 + 7 * r(), (r() - 0.5) * 9),
+                col: 0xe8f8ff, col2: mv.edge, size: 0.55, grav: 18, drag: 0.4 });
             }
           }
           if (mv.charge) {
@@ -3759,18 +3791,29 @@
           // impacts: pk then target
           const pkT = tau - mv.tPk, hT = tau - mv.tHit;
           if (pkT > 0 && pkT < 0.6) {
-            const g = glows[0]; g.visible = true; g.position.copy(pkHit); g.scale.setScalar(9 * (1 - pkT / 0.6) + 2); g.material.color.set(mv.edge2); g.material.opacity = 1 - pkT / 0.6;
+            const g = glows[0]; g.visible = true; g.position.copy(pkHit); g.scale.setScalar(9 * (1 - pkT / 0.6) + 2); g.material.color.set(mv.edge2); g.material.opacity = (1 - pkT / 0.6) * (mv.water ? 0.4 : 1);
           }
-          emit({ seed: 41 + stage, n: 220, t0: mv.tPk, t1: mv.tPk + 0.05, life: 1.0, tau,
+          if (mv.water) {
+            // splash bursts that rain down, plus a slow mist, at both impacts
+            for (const [sd, p0, t0] of [[61, pkHit, mv.tPk], [71, target, mv.tHit]]) {
+              emit({ seed: sd + stage, n: 380, t0, t1: t0 + 0.12, life: 1.3, tau, at: () => p0.clone(),
+                vel: (r) => V(r() - 0.5, r() * 0.9 - 0.2, r() - 0.5).normalize().multiplyScalar(6 + 12 * r()).add(V(0, 4, 0)),
+                col: 0xffffff, col2: mv.edge, size: 0.7, grav: 20, drag: 0.6 });
+              emit({ seed: sd + 5 + stage, n: 46, t0, t1: t0 + 0.5, life: 1.6, tau, at: (u) => p0.clone().add(V(u - 0.5, 0, 0)),
+                vel: (r) => V(r() - 0.5, r() * 0.6, r() - 0.5).multiplyScalar(5),
+                col: 0xdff4ff, size: 5.5, grow: 1.6, drag: 1.4, alpha: 0.16 });
+            }
+          }
+          emit({ seed: 41 + stage, n: mv.water ? 90 : 220, t0: mv.tPk, t1: mv.tPk + 0.05, life: 1.0, tau,
             at: () => pkHit.clone(), vel: (r) => V(r() - 0.5, r() - 0.5, r() - 0.5).normalize().multiplyScalar(6 + 16 * r()).addScaledVector(breakDir, 8),
             col: 0xffffff, col2: mv.edge2, size: 0.7, grav: 6, drag: 1.2 });
           if (hT > 0 && hT < 0.7) {
-            const g = glows[1]; g.visible = true; g.position.copy(target); g.scale.setScalar(11 * (1 - hT / 0.7) + 3); g.material.color.set(mv.edge); g.material.opacity = 1 - hT / 0.7;
+            const g = glows[1]; g.visible = true; g.position.copy(target); g.scale.setScalar(11 * (1 - hT / 0.7) + 3); g.material.color.set(mv.edge); g.material.opacity = (1 - hT / 0.7) * (mv.water ? 0.35 : 1);
           }
-          emit({ seed: 51 + stage, n: 260, t0: mv.tHit, t1: mv.tHit + 0.06, life: 0.9, tau,
+          if (!mv.water) emit({ seed: 51 + stage, n: 260, t0: mv.tHit, t1: mv.tHit + 0.06, life: 0.9, tau,
             at: () => target.clone(), vel: (r) => V(r() - 0.5, r() - 0.5, r() - 0.5).normalize().multiplyScalar(5 + 14 * r()),
             col: mv.edge, col2: mv.core, size: 1.3, drag: 2.2 });
-          flash = Math.max(flash, 0.10 * Math.exp(-Math.max(0, pkT) * 12) * (pkT > 0 ? 1 : 0), 0.16 * Math.exp(-Math.max(0, hT) * 10) * (hT > 0 ? 1 : 0));
+          if (!mv.water) flash = Math.max(flash, 0.10 * Math.exp(-Math.max(0, pkT) * 12) * (pkT > 0 ? 1 : 0), 0.16 * Math.exp(-Math.max(0, hT) * 10) * (hT > 0 ? 1 : 0));
           flashCol = mv.core;
           light = Math.max(light, on * (mv.beam === 'hb' ? 30 : 18)); lightCol = mv.edge;
           shake = Math.max(shake, (mv.beam === 'hb' ? 0.55 : 0.35) * (hT > 0 ? Math.exp(-hT * 3) * (1 - smooth(win(hT, 1.0, 1.8))) : 0) + 0.12 * on);
@@ -3787,7 +3830,7 @@
         window.__lastShake = shake;
       }
 
-      function applyRay(tau, off, rot, act, vis, bl) {
+      function applyRay(tau, off, rot, act, vis, bl, bc) {
         model.visible = vis;
         rayBones(tau, act);
         rqPivot.position.copy(rqHome).add(off);
@@ -3797,10 +3840,10 @@
         _q.setFromEuler(_e.set(rot.x + Math.sin(W * tau + 0.6) * 0.03, rot.y, rot.z + Math.sin(W * tau) * 0.05));
         rqPivot.quaternion.multiply(_q);
         rqPivot.scale.setScalar(L.ray.scale);
-        blink(rqMats, bl);
+        blink(rqMats, bl, bc);
         rqPivot.updateMatrixWorld(true);
       }
-      function applyLug(tau, off, rot, list, vis, bl) {
+      function applyLug(tau, off, rot, list, vis, bl, bc) {
         lug.visible = vis;
         lugPose(list);
         lugPivot.position.copy(lugHome).add(off);
@@ -3808,7 +3851,7 @@
         lugPivot.quaternion.copy(lugQ0);
         _q.setFromEuler(_e.set(rot.x, rot.y, rot.z));
         lugPivot.quaternion.multiply(_q);
-        blink(lugMats, bl);
+        blink(lugMats, bl, bc);
         lugPivot.updateMatrixWorld(true);
       }
 
