@@ -4115,10 +4115,20 @@
         el.loop = LOOPS.test(name);
         // only seek if needed: a seek drops readyState until it lands
         if (el.currentTime !== 0) try { el.currentTime = 0; } catch (e) {}
+        // start it while still hidden and raise it only once a frame is
+        // actually painted; raising first showed one black frame on the cut
+        if (el.seeking) await new Promise((res) => { el.addEventListener('seeked', res, { once: true }); setTimeout(res, 1000); });
+        if (!paused) el.play().catch(() => {});
+        await new Promise((res) => {
+          setTimeout(res, fade ? 1500 : 200);   // a fade-in may be a cold load
+          if (el.requestVideoFrameCallback && !paused) el.requestVideoFrameCallback(() => res());
+          else if (el.readyState >= 2 && !el.seeking) res();
+          else el.addEventListener('seeked', res, { once: true });
+        });
+        if (my !== epoch) return false;
         el.style.zIndex = String(++z);
         el.classList.toggle('cut', !fade);
         el.classList.add('on');
-        if (!paused) el.play().catch(() => {});
         const prev = cur;
         cur = el;
         // the outgoing clip is under the new one: retire it once the new
