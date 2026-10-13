@@ -3789,8 +3789,8 @@
       let active = false, epoch = 0, cur = null, z = 10, st = null, typeTimer = 0;
 
       /* ── battle audio: all Web Audio, run by the player so it follows
-         the clip schedule. Cries are the two sfx files; every other sound
-         and the music are synthesized here. Cues fire when the playing
+         the clip schedule. Cries and the music are files in sfx/; every
+         other sound is synthesized here. Cues fire when the playing
          clip's currentTime crosses them, so a stalled clip stalls its
          sounds too. The context is created inside the trigger gesture
          (iOS); on iOS the ringer switch can still silence Web Audio,
@@ -3801,7 +3801,7 @@
         try { muted = localStorage.getItem(KEY) === '1'; } catch (e) {}
         let ctx = null, out, master, musicBus, sfxBus, noise = null;
         const cries = {};
-        let seq = null, musicOn = false;
+        let bgm = null, musicOn = false;
 
         function init() {
           try {
@@ -3826,6 +3826,11 @@
                 .then(b => { cries[who] = b; }).catch(() => {});
               load('ray', `sfx/rayquaza-cry.${fmt}`);
               load('lug', 'sfx/lugia-cry.mp3');
+              try {
+                bgm = new Audio(`sfx/battle-theme.${fmt}`);
+                bgm.loop = true; bgm.preload = 'auto';
+                ctx.createMediaElementSource(bgm).connect(musicBus);
+              } catch (e) { bgm = null; }
             }
             if (ctx.state !== 'running') ctx.resume().catch(() => {});
             out.gain.cancelScheduledValues(ctx.currentTime);
@@ -3974,52 +3979,29 @@
           ], alive);
         }
 
-        // ── music: original loop, E minor, 140bpm. Bass pumps eighths,
-        //    a filtered saw arpeggio runs sixteenths, kick/snare/hats. ──
-        const BPM = 140, S16 = 60 / BPM / 4;
+        // ── music: sfx/battle-theme (HG/SS Johto champion battle remix,
+        //    cut from 0:44, 4 min, loops). Streamed through an <audio>
+        //    element into musicBus so it ducks and mutes with everything
+        //    else without decoding minutes of PCM into memory. ──
+        const BPM = 140;
         const midi = (m) => 440 * Math.pow(2, (m - 69) / 12);
-        // chords (root, third, fifth, octave as midi) per bar: Em C D Bm, Em C Am B
-        const BARS = [[40, 52, 55, 59, 64], [36, 48, 52, 55, 60], [38, 50, 54, 57, 62], [35, 47, 50, 54, 59],
-                      [40, 52, 55, 59, 64], [36, 48, 52, 55, 60], [33, 45, 48, 52, 57], [35, 47, 51, 54, 59]];
-        const ARP = [1, 2, 3, 4, 3, 2, 1, 2, 1, 2, 3, 4, 3, 4, 3, 2];
         function kick(t) { tone('sine', 150, 42, t, 0.16, 0.5, musicBus, 0.002); }
         function snare(t) { hiss(t, 0.12, 0.22, 'bandpass', 1800, 1500, 0.8, musicBus, 0.002); tone('triangle', 230, 180, t, 0.07, 0.12, musicBus, 0.002); }
-        function hat(t, open) { hiss(t, open ? 0.09 : 0.03, open ? 0.06 : 0.04, 'highpass', 7000, 7000, 0.7, musicBus, 0.001); }
-        function step(i, t) {
-          const bar = BARS[Math.floor(i / 16) % BARS.length], s = i % 16;
-          if (s % 2 === 0) tone('sawtooth', midi(bar[0] - 12 + (s % 4 === 2 ? 12 : 0)), midi(bar[0] - 12 + (s % 4 === 2 ? 12 : 0)), t, S16 * 1.6, 0.16, musicBus, 0.004);
-          const n = bar[ARP[s]] + 12;
-          const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
-          o.type = 'sawtooth'; o.frequency.value = midi(n);
-          f.type = 'lowpass'; f.frequency.setValueAtTime(2600, t); f.frequency.exponentialRampToValueAtTime(700, t + S16);
-          env(g, t, 0.003, 0.06, S16 * 0.9); o.connect(f); f.connect(g); g.connect(musicBus); o.start(t); o.stop(t + S16 + 0.05);
-          if (s === 0 || s === 8 || s === 10) kick(t);
-          if (s === 4 || s === 12) snare(t);
-          if (s === 15 && Math.floor(i / 16) % 4 === 3) snare(t);
-          hat(t, s % 4 === 2);
-          // a held lead note on each bar's downbeat every other bar
-          if (s === 0 && Math.floor(i / 16) % 2 === 0) tone('square', midi(bar[4] + 12), midi(bar[4] + 12), t, S16 * 7, 0.035, musicBus, 0.02);
-        }
+        let bgmStop = 0;
         function music(on) {
           if (!ok()) return;
+          clearTimeout(bgmStop);
           if (on) {
-            if (seq) clearInterval(seq.id);
-            const start = now() + 0.1;
-            seq = { i: 0, next: start, id: 0 };
             musicOn = true;
             musicBus.gain.cancelScheduledValues(now());
             musicBus.gain.setValueAtTime(0.0001, now());
-            musicBus.gain.exponentialRampToValueAtTime(0.3, now() + 1.6);
-            const run = () => {
-              while (seq && seq.next < now() + 0.15) { step(seq.i, seq.next); seq.i++; seq.next += S16; }
-            };
-            run();
-            seq.id = setInterval(run, 30);
+            musicBus.gain.exponentialRampToValueAtTime(0.3, now() + 1.2);
+            if (bgm) { try { bgm.currentTime = 0; } catch (e) {} bgm.play().catch(() => {}); }
           } else {
             musicOn = false;
-            if (seq) { clearInterval(seq.id); seq = null; }
             musicBus.gain.cancelScheduledValues(now());
             musicBus.gain.setTargetAtTime(0.0001, now(), 0.12);
+            if (bgm) bgmStop = setTimeout(() => { if (!musicOn) bgm.pause(); }, 700);
           }
         }
         // victory (major fanfare) / defeat (falling minor), after the loop stops
@@ -4051,6 +4033,7 @@
         function pause(p) {
           if (!ok()) return;
           if (p) ctx.suspend().catch(() => {}); else if (active) ctx.resume().catch(() => {});
+          if (bgm) { if (p) bgm.pause(); else if (musicOn && active) bgm.play().catch(() => {}); }
         }
         function setMuted(m) {
           muted = m;
@@ -4058,7 +4041,7 @@
           if (ok()) { master.gain.cancelScheduledValues(now()); master.gain.setTargetAtTime(m ? 0 : 0.5, now(), 0.03); }
         }
         return { init, blip, tick, cry, move, music, jingle, stop, pause, setMuted, get muted() { return muted; },
-                 state: () => ({ ctx: ctx ? ctx.state : 'none', music: !!seq, cries: Object.keys(cries) }) };
+                 state: () => ({ ctx: ctx ? ctx.state : 'none', music: musicOn && !!bgm && !bgm.paused, cries: Object.keys(cries) }) };
       })();
 
       function get(name) {
