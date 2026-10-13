@@ -4160,12 +4160,50 @@
           if (k < 1) requestAnimationFrame(count);
         })(t0);
       }
-      // 30-45 damage, 1 in 8 crits for 1.5x: a KO lands on the 2nd to 4th
-      // hit taken, so always within the baked stages (pk stage 3-5)
-      const roll = () => {
-        const crit = Math.random() < 0.125;
-        return { dmg: Math.round((30 + Math.random() * 15) * (crit ? 1.5 : 1)), crit };
+      /* BATTLE-RULES-START: pure turn logic; tools/battle-sim.mjs evals
+         exactly this block to check the balance, keep it self-contained */
+      const RULES = {
+        lugFirst: 0.55,              // Lugia is the faster mon
+        moves: {
+          'ray-m1': { lo: 35, hi: 45, crit: 1 / 16 },                  // dragon pulse: steady
+          'ray-m2': { lo: 52, hi: 64, crit: 1 / 16, recharge: true },  // hyper beam: big, then a lost turn
+          'lug-m1': { lo: 27, hi: 35, crit: 1 / 4 },                   // aeroblast: high crit
+          'lug-m2': { lo: 33, hi: 43, crit: 1 / 16 },                  // hydro pump
+        },
+        koStage: 3,                  // faint clips exist for pk stages 3-5 only
+        maxStage: 5,
       };
+      const cpuPick = (st, rnd) => (rnd() < (st.ray <= 45 ? 0.7 : 0.5) ? 'lug-m2' : 'lug-m1');
+      // plays one turn out on a copy of st ({ray, lug, stage, recharge});
+      // returns the new state and the ordered actions, which name exactly
+      // the clips the turn needs
+      function planTurn(st0, pick, rnd) {
+        const st = { ...st0 }, acts = [];
+        const hit = (who, move) => {
+          const m = RULES.moves[move], crit = rnd() < m.crit;
+          const dmg = Math.round((m.lo + rnd() * (m.hi - m.lo)) * (crit ? 1.5 : 1));
+          const from = st.stage;
+          st.stage = Math.min(RULES.maxStage, st.stage + 1);
+          const def = who === 'ray' ? 'lug' : 'ray';
+          let hp = Math.max(0, st[def] - dmg);
+          if (hp === 0 && st.stage < RULES.koStage) hp = 1;   // no faint clip before stage 3
+          st[def] = hp;
+          acts.push({ who, move, from, to: st.stage, dmg, crit, def, hp, ko: hp === 0 });
+          return hp === 0;
+        };
+        if (st.recharge) {
+          st.recharge = false;
+          acts.push({ who: 'ray', recharge: true });
+          hit('lug', cpuPick(st, rnd));
+          return { st, acts };
+        }
+        const cpu = cpuPick(st, rnd);
+        const order = rnd() < RULES.lugFirst ? ['lug', 'ray'] : ['ray', 'lug'];
+        for (const who of order) if (hit(who, who === 'ray' ? pick : cpu)) return { st, acts };
+        if (RULES.moves[pick].recharge) st.recharge = true;
+        return { st, acts };
+      }
+      /* BATTLE-RULES-END */
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
       function menu() {
@@ -4182,7 +4220,7 @@
         const me = epoch;
         setTimeout(() => { if (me === epoch && active) sound.cry('lug'); }, 700);
         syncMute();
-        st = { ray: 100, lug: 100, stage: 0 };
+        st = { ray: 100, lug: 100, stage: 0, recharge: false };
         setHp('ray', 100, true); setHp('lug', 100, true);
         movesEl.hidden = true; endEl.hidden = true;
         say('a wild lugia appeared!');
@@ -4248,44 +4286,43 @@
         }, 650);
       }
 
-      async function turn(m) {
-        const my = epoch;
+      const WHO = { ray: 'rayquaza', lug: 'lugia' };
+      // plays one rolled turn: the first clip waits for the idle loop's
+      // wrap, every later clip cuts in on the previous one's last frame.
+      // pick is null on a recharge turn (no menu, Lugia just attacks).
+      async function turn(pick) {
+        const my = epoch, alive = () => my === epoch;
         movesEl.hidden = true;
-        const s = st.stage, s1 = Math.min(5, s + 1);
-        const pm = `ray-m${m}`, atk = roll();
-        const lugLeft = Math.max(0, st.lug - atk.dmg);
-        let cpu = null, s2 = s1, rayLeft = st.ray;
-        if (lugLeft > 0) {
-          cpu = { move: Math.random() < 0.5 ? 'lug-m1' : 'lug-m2', ...roll() };
-          s2 = Math.min(5, s1 + 1);
-          rayLeft = Math.max(0, st.ray - cpu.dmg);
+        const { st: next, acts } = planTurn(st, pick, Math.random);
+        const hits = acts.filter((a) => a.move), ko_ = hits.find((a) => a.ko);
+        const clips = hits.map((a) => `${a.move}-s${a.from}`);
+        for (const n of [`ray-m1-s${st.stage}`, `ray-m2-s${st.stage}`])
+          if (!clips.includes(n) && pool.has(n)) drop(pool.get(n));
+        preload(...clips, ...(ko_ ? [`${ko_.def}-faint-s${ko_.to}`, `win-${ko_.def === 'lug' ? 'ray' : 'lug'}-s${ko_.to}`]
+                                  : [`idle-s${next.stage}`]));
+        // a recharge turn follows: both Lugia moves at that stage, early
+        if (!ko_ && next.recharge) preload(`lug-m1-s${next.stage}`, `lug-m2-s${next.stage}`);
+        if (acts[0].recharge) {
+          say('rayquaza must recharge!');
+          await wait(1100);
+          if (!alive()) return;
         }
-        const unpicked = pool.get(`ray-m${3 - m}-s${s}`);
-        if (!cpu) preload(`${pm}-s${s}`, `lug-faint-s${s1}`, `win-ray-s${s1}`);
-        else preload(`${pm}-s${s}`, `${cpu.move}-s${s1}`,
-                     ...(rayLeft > 0 ? [`idle-s${s2}`] : [`ray-faint-s${s2}`, `win-lug-s${s2}`]));
-        say(`rayquaza used ${NAMES[pm]}!`);
+        say(`${WHO[hits[0].who]} used ${NAMES[hits[0].move]}!`);
         if (!await ends(cur)) return;            // the idle hands off at its wrap
-        drop(unpicked);
-        if (!await show(`${pm}-s${s}`, false)) return;
-        const alive = () => my === epoch;
-        sound.move(cur, pm, s1, alive);
-        if (!await at(cur, HIT[pm])) return;
-        st.lug = lugLeft; setHp('lug', lugLeft);
-        if (atk.crit) say('a critical hit!');
-        if (!await ends(cur)) return;
-        st.stage = s1;
-        if (!cpu) return ko('lug', s1, my);
-        say(`lugia used ${NAMES[cpu.move]}!`);
-        if (!await show(`${cpu.move}-s${s1}`, false)) return;
-        sound.move(cur, cpu.move, s2, alive);
-        if (!await at(cur, HIT[cpu.move])) return;
-        st.ray = rayLeft; setHp('ray', rayLeft);
-        if (cpu.crit) say('a critical hit!');
-        if (!await ends(cur)) return;
-        st.stage = s2;
-        if (rayLeft <= 0) return ko('ray', s2, my);
-        if (!await show(`idle-s${s2}`, false)) return;
+        for (const [i, a] of hits.entries()) {
+          if (i) say(`${WHO[a.who]} used ${NAMES[a.move]}!`);
+          if (!await show(`${a.move}-s${a.from}`, false)) return;
+          sound.move(cur, a.move, a.to, alive);
+          if (!await at(cur, HIT[a.move])) return;
+          st[a.def] = a.hp; setHp(a.def, a.hp);
+          if (a.crit) say('a critical hit!');
+          if (!await ends(cur)) return;
+          st.stage = a.to;
+          if (a.ko) return ko(a.def, a.to, my);
+        }
+        st = next;
+        if (!await show(`idle-s${st.stage}`, false)) return;
+        if (st.recharge) return turn(null);
         menu();
       }
 
@@ -4316,7 +4353,7 @@
         if (!b || b.disabled || !active) return;
         if (b.dataset.act === 'mute') { sound.setMuted(!sound.muted); syncMute(); if (!sound.muted) sound.blip(); return; }
         sound.blip();
-        if (b.dataset.m) { movesEl.querySelectorAll('button').forEach((x) => { x.disabled = true; }); turn(+b.dataset.m); }
+        if (b.dataset.m) { movesEl.querySelectorAll('button').forEach((x) => { x.disabled = true; }); turn(`ray-m${b.dataset.m}`); }
         else if (b.dataset.act === 'run') { movesEl.hidden = true; epoch++; say('got away safely!'); setTimeout(exit, 1100); }
         else if (b.dataset.act === 'exit') exit();
         else if (b.dataset.act === 'rematch') { epoch++; begin(true); }
