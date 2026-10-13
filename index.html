@@ -1958,6 +1958,9 @@
       animation: none !important;
     }
   </style>
+  <!-- Vercel Web Analytics (anonymous, no cookies) -->
+  <script>window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };</script>
+  <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body>
 
@@ -4265,6 +4268,7 @@
 
       async function start() {
         if (active) return;
+        try { window.va && window.va('event', { name: 'battle_start' }); } catch (e) {}
         // the konami arrows scroll the page; the overlay is anchored to
         // the hero, so bring it back to the top (instantly when it is
         // only nudged, smoothly from further down)
@@ -4364,6 +4368,7 @@
 
       async function ko(who, s, my) {
         const winner = who === 'lug' ? 'ray' : 'lug';
+        try { window.va && window.va('event', { name: 'battle_end', data: { result: winner === 'ray' ? 'won' : 'lost' } }); } catch (e) {}
         say(`${who === 'lug' ? 'lugia' : 'rayquaza'} fainted!`);
         if (!await show(`${who}-faint-s${s}`, false)) return;
         sound.music(false);
