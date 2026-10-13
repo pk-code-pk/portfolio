@@ -84,7 +84,12 @@ the scene relights it).
 
 The site player (index.html, `battleEgg`) waits for a loop's wrap before
 cutting, so a picked move starts within 2s. Hit times in its `HIT` table
-must match the scene's `MOVES` (`tHit`).
+(and the sound cues in `CUES`) must match the scene's `MOVES` (`tHit`).
+
+Balance lives in the pure `planTurn` block between `BATTLE-RULES-START` /
+`-END` in index.html. `node tools/battle-sim.mjs` evals that exact block
+over 100k battles per player policy; keep every policy within ~40-60%
+wins and early KOs at 0 (there are no faint clips before pk stage 3).
 
 ## How it works — read before touching
 
