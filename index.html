@@ -3776,15 +3776,26 @@
         el.className = 'hero-frame hero-vid bt-vid cut';
         el.muted = true; el.playsInline = true; el.preload = 'auto';
         el.setAttribute('muted', ''); el.setAttribute('playsinline', '');
+        // ready = first frame decodable, or a failure, or 5s: iOS Safari
+        // may not buffer preload=auto media until play(), so never wait on
+        // loadeddata alone
         el.ready = new Promise((res) => {
-          el.addEventListener('loadeddata', res, { once: true });
-          el.addEventListener('error', res, { once: true });
+          for (const ev of ['loadeddata', 'canplay', 'error']) el.addEventListener(ev, res, { once: true });
+          setTimeout(res, 5000);
         });
         el.src = bsrc(name);
         heroEl.appendChild(el);
         pool.set(name, el);
+        el.load();
+        // nudge: a muted play/pause makes iOS fetch and decode frame 0
+        // while the clip waits offscreen (skipped once it is shown)
+        const p = el.play();
+        if (p) p.then(() => { if (!el.shown) { el.pause(); try { el.currentTime = 0; } catch (e) {} } }).catch(() => {});
         return el;
       }
+      // only a hard failure bails here; a clip that is merely slow is
+      // shown anyway and the stall guard in watch() covers it
+      const broken = (el) => !!el.error;
       const preload = (...names) => names.forEach(get);
       function drop(el) {
         if (!el || el === cur) return;
@@ -3797,6 +3808,8 @@
         const el = get(name), my = epoch;
         await el.ready;
         if (my !== epoch) return false;
+        if (broken(el)) { bail(); return false; }
+        el.shown = true;
         el.loop = LOOPS.test(name);
         try { el.currentTime = 0; } catch (e) {}
         el.style.zIndex = String(++z);
@@ -3811,27 +3824,28 @@
         return true;
       }
       // resolves on the clip's last frame; a loop finishes its current pass
+      // both waits give up (and end the battle) if playback errors or
+      // stops advancing for 6s while it should be running
+      function watch(el, done) {
+        const my = epoch;
+        let lastT = -1, lastMove = performance.now();
+        return new Promise((res) => {
+          (function poll(now) {
+            if (my !== epoch) return res(false);
+            if (done()) return res(true);
+            now = now || performance.now();
+            if (el.currentTime !== lastT || paused || document.hidden) { lastT = el.currentTime; lastMove = now; }
+            if (el.error || now - lastMove > 6000) { bail(); return res(false); }
+            requestAnimationFrame(poll);
+          })();
+        });
+      }
+      // resolves on the clip's last frame; a loop finishes its current pass
       function ends(el) {
-        const my = epoch;
         el.loop = false;
-        return new Promise((res) => {
-          (function poll() {
-            if (my !== epoch) return res(false);
-            if (el.ended || (el.duration && el.currentTime >= el.duration - 0.017)) return res(true);
-            requestAnimationFrame(poll);
-          })();
-        });
+        return watch(el, () => el.ended || (el.duration && el.currentTime >= el.duration - 0.017));
       }
-      function at(el, t) {
-        const my = epoch;
-        return new Promise((res) => {
-          (function poll() {
-            if (my !== epoch) return res(false);
-            if (el.currentTime >= t || el.ended) return res(true);
-            requestAnimationFrame(poll);
-          })();
-        });
-      }
+      const at = (el, t) => watch(el, () => el.currentTime >= t || el.ended);
 
       function say(text) {
         clearInterval(typeTimer);
@@ -3897,6 +3911,15 @@
           if (action === 'pause') cur.pause(); else cur.play().catch(() => {});
         };
         await begin(true);
+      }
+
+      // a clip failed to load or play: leave cleanly instead of hanging
+      function bail() {
+        if (!active) return;
+        epoch++;
+        movesEl.hidden = true; endEl.hidden = true;
+        say('lugia flew off into the clouds.');
+        setTimeout(exit, 1500);
       }
 
       function exit() {
