@@ -374,6 +374,10 @@
        switcher is gone and clicks can't start its flight. Used by the
        idle bake (capture mode) and the site's live-3D toggle alike. */
     const NO_POKE = new URLSearchParams(location.search).get('poke') === '0';
+    /* &battle=1 (capture only): the easter-egg battle, Rayquaza vs Lugia
+       across a shattering pk. Baked into hero-video/battle/ by
+       tools/bake.mjs; see the BATTLE block above the animate loop. */
+    const BATTLE = !!CAP && new URLSearchParams(location.search).get('battle') === '1';
     if (NO_POKE) {
       const st = document.createElement('style');
       st.textContent = '#poke-toggle{display:none !important}';
@@ -3134,6 +3138,725 @@
       console.info('[hero] quality tier', qgTier);
     })();
 
+    /* ── BATTLE (&battle=1, capture only) ─────────────────────────────
+       The hidden battle on the site is a chain of pre-baked clips; this
+       block is what gets filmed. Rayquaza (left / near) and Lugia (right /
+       far) trade moves THROUGH the glass pk, which shatters a little more
+       with every hit. Everything here is a pure function of clip-local
+       time, so a clip renders byte-identical every time it is baked.
+
+       Seamless cutting is the whole design:
+         - the world is frozen (see `t` in tick), so only these parts move
+         - every idle motion repeats exactly every BT_P seconds, and every
+           clip is a whole number of periods long, so any clip that ends
+           at stage s can cut straight into any clip that starts at s
+         - pk damage is a fixed function of the stage (seeded), never of
+           which moves got there, so stage s looks identical in every clip
+
+       Clips (window.__capBattle({clip, stage}) → base time):
+         intro          stage 0: both fly in, ends on idle
+         idle           loop of BT_P seconds at `stage`
+         ray-m1/ray-m2  Rayquaza: Dragon Pulse / Hyper Beam, stage s → s+1
+         lug-m1/lug-m2  Lugia: Aeroblast / Hydro Pump, stage s → s+1
+                        (at stage 5 nothing more breaks, the shards jolt)
+         ray-faint      Rayquaza faints at `stage`, Lugia roars
+         lug-faint      Lugia faints at `stage`, Rayquaza roars
+         win-ray/win-lug  loop: the winner alone at `stage` */
+    const BT_P = 2.0;                 // idle period (s); every clip is n × BT_P
+    const BT_T0 = 100;                // scene time of clip-local 0
+    const BT_STAGES = 5;
+    let battle = null;
+    if (BATTLE) {
+      const btWait = setInterval(() => {
+        if (!model || !pkText || !bodyChain.length) return;
+        clearInterval(btWait);
+        try { initBattle(); } catch (e) { console.error('[battle] init failed', e); }
+      }, 50);
+    }
+
+    function initBattle() {
+      const PORT = TOUCH_DEVICE;          // portrait bake (&touch=1)
+      const PK = pkText.position.clone(); // pk center = modelCenter
+      const mc0 = modelCenter.clone();
+      const TAU = Math.PI * 2, W = TAU / BT_P;
+      const rnd = (seed) => {             // mulberry32
+        let a = seed >>> 0;
+        return () => {
+          a = (a + 0x6D2B79F5) >>> 0;
+          let x = Math.imul(a ^ (a >>> 15), 1 | a);
+          x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+          return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+        };
+      };
+      const hash = (i, j) => rnd(i * 7919 + j * 104729 + 13)();
+      const smooth = (x) => { x = clamp01(x); return x * x * (3 - 2 * x); };
+      const win = (x, a, b) => clamp01((x - a) / (b - a));
+      const bump = (x, a, b, c) => x < a || x > c ? 0 : x < b ? smooth((x - a) / (b - a)) : 1 - smooth((x - b) / (c - b));
+      const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+      /* ── layout: Rayquaza low-left and near, Lugia high-right and far, so
+         every shot crosses the pk on the way. Portrait stacks them, and its
+         camera pulls back by CAM_K (dollied during the intro, which starts
+         on the idle hero's framing): a phone has the nav on top and the
+         battle box at the bottom to keep clear of. Everything must also
+         survive object-fit:cover on 4:3 screens / 19.5:9 phones, which
+         crops ~12% / ~9% off each side. */
+      const CAM_K = PORT ? 1.38 : 1.0;
+      const L = PORT ? {
+        ray:  { pos: V(-2.6, -13.6, 6), yaw: 0.55, roll: 0.45, scale: 1.1 },
+        lug:  { pos: V(1.8, 7.6, -8),   yaw: -0.55, scale: 1.0, size: 9 },
+      } : {
+        ray:  { pos: V(-14.3, -3.6, 3), yaw: 0.22, roll: 0.22, scale: 1.0 },
+        lug:  { pos: V(12.8, -6.6, -4), yaw: -1.05, scale: 1.0, size: 10.5 },
+      };
+
+      /* ── Rayquaza: reparent under a pivot at its own body center, so the
+         battle can place, lunge and drop it without the model origin's
+         offset swinging it around. The bone rig below is a periodic copy
+         of the hero idle (every frequency a multiple of 2π/BT_P). */
+      const rqPivot = new THREE.Group();
+      scene.add(rqPivot);
+      rqPivot.add(model);
+      model.position.set(-mc0.x, -mc0.y, -mc0.z);
+      model.rotation.set(0, 0, 0);
+      const rqMats = [];
+      model.traverse(o => {
+        if (!o.isMesh || !o.material) return;
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+          if ('emissive' in m) rqMats.push({ m, e: m.emissive.clone(), i: m.emissiveIntensity });
+        });
+      });
+      const rqHead = bodyChain[0], rqNeck = bodyChain[1], rqTailRoot = bodyChain[5] || bodyChain[3];
+
+      /* ── Lugia: real game rig; clips are sampled at explicit times (no
+         mixer dt), cross-faded by weights computed from the timeline. */
+      let lug = null, lugMixer = null, lugActs = {}, lugMats = [], lugHead = null, lugChest = null;
+      const lugPivot = new THREE.Group();
+      scene.add(lugPivot);
+      const clipLen = {};
+      new GLTFLoader().load('pokemon/lugia.glb', (gltf) => {
+        lug = gltf.scene;
+        lug.traverse(o => {
+          if (o.isMesh || o.isSkinnedMesh) {
+            o.frustumCulled = false;
+            const old = o.material;
+            // the game textures ship unlit; relight them so Lugia sits in
+            // the same light as Rayquaza and the pk
+            const m = new THREE.MeshStandardMaterial({
+              map: old.map || null, color: old.color ? old.color.clone() : 0xffffff,
+              roughness: 0.55, metalness: 0.0, envMapIntensity: 1.25,
+              transparent: old.transparent, alphaTest: old.alphaTest || 0, side: old.side,
+            });
+            if (m.map) { m.map.colorSpace = THREE.SRGBColorSpace; m.map.anisotropy = renderer.capabilities.getMaxAnisotropy(); }
+            o.material = m;
+            lugMats.push({ m, e: m.emissive.clone(), i: m.emissiveIntensity });
+          }
+          if (o.isBone) {
+            const n = o.name.toLowerCase();
+            if (!lugHead && /head/.test(n) && !/end/.test(n)) lugHead = o;
+            if (!lugChest && /(spine|chest|waist|hips)/.test(n)) lugChest = o;
+          }
+        });
+        // fit: wingspan → L.lug.size world units, feet-ish at the pivot
+        const box = new THREE.Box3().setFromObject(lug);
+        const size = box.getSize(new THREE.Vector3());
+        const k = L.lug.size / Math.max(size.x, size.z);
+        lug.scale.setScalar(k);
+        const c = box.getCenter(new THREE.Vector3()).multiplyScalar(k);
+        lug.position.set(-c.x, -c.y, -c.z);
+        lugPivot.add(lug);
+        lugMixer = new THREE.AnimationMixer(lug);
+        gltf.animations.forEach(a => {
+          const key = a.name.replace(/^pm0249_\d+_\d+_\d+_/, '');
+          clipLen[key] = a.duration;
+          const act = lugMixer.clipAction(a);
+          act.play(); act.setEffectiveWeight(0);
+          lugActs[key] = act;
+        });
+        console.log('[battle] lugia', Object.keys(lugActs).join(' '), 'head', lugHead && lugHead.name, 'chest', lugChest && lugChest.name);
+        buildShards();
+        window.__battleReady = true;
+      }, undefined, (e) => console.error('[battle] lugia load failed', e));
+
+      /* ── pk shards: subdivide the glass letters into small triangles,
+         then group them into Voronoi cells (2D in the letter plane, so each
+         shard runs the full depth). Each stage blasts a fixed set of cells
+         out around that stage's impact point and loosens the rest. */
+      const shards = [];
+      const pkGroup = new THREE.Group();
+      const IMPACT = [null, V(0.3, 0.2, 0), V(-3.2, 1.4, 0), V(3.4, 2.4, 0), V(-4.6, -3.2, 0), V(2.6, -1.6, 0)];
+      const TAKE = [0, 8, 10, 11, 12, 14];
+      function buildShards() {
+        const src = pkText.geometry;
+        const P0 = src.attributes.position.array, N0 = src.attributes.normal.array;
+        let pos = Array.from(P0), nor = Array.from(N0);
+        const MAX = 0.55;
+        for (let pass = 0; pass < 14; pass++) {
+          const np = [], nn = [];
+          let split = 0;
+          for (let i = 0; i < pos.length; i += 9) {
+            const v = [0, 1, 2].map(j => [pos[i + j * 3], pos[i + j * 3 + 1], pos[i + j * 3 + 2]]);
+            const n = [0, 1, 2].map(j => [nor[i + j * 3], nor[i + j * 3 + 1], nor[i + j * 3 + 2]]);
+            const d = (a, b) => Math.hypot(v[a][0] - v[b][0], v[a][1] - v[b][1], v[a][2] - v[b][2]);
+            const e = [d(0, 1), d(1, 2), d(2, 0)];
+            const m = e.indexOf(Math.max(...e));
+            if (e[m] <= MAX) { for (let j = 0; j < 3; j++) { np.push(...v[j]); nn.push(...n[j]); } continue; }
+            split++;
+            const a = m, b = (m + 1) % 3, c = (m + 2) % 3;
+            const mid = v[a].map((x, q) => (x + v[b][q]) / 2);
+            const mn = n[a].map((x, q) => (x + n[b][q]) / 2);
+            const l = Math.hypot(...mn) || 1; mn[0] /= l; mn[1] /= l; mn[2] /= l;
+            np.push(...v[a], ...mid, ...v[c]); nn.push(...n[a], ...mn, ...n[c]);
+            np.push(...mid, ...v[b], ...v[c]); nn.push(...mn, ...n[b], ...n[c]);
+          }
+          pos = np; nor = nn;
+          if (!split) break;
+        }
+        const triCount = pos.length / 9;
+        const cen = new Float32Array(triCount * 2);
+        for (let t = 0; t < triCount; t++) {
+          const i = t * 9;
+          cen[t * 2] = (pos[i] + pos[i + 3] + pos[i + 6]) / 3;
+          cen[t * 2 + 1] = (pos[i + 1] + pos[i + 4] + pos[i + 7]) / 3;
+        }
+        // seeds: random triangle centroids with a min spacing, so cells
+        // land on the letters rather than the empty space around them
+        const r = rnd(1066), seeds = [];
+        for (let tries = 0; tries < 8000 && seeds.length < 90; tries++) {
+          const t = Math.floor(r() * triCount);
+          const sx = cen[t * 2], sy = cen[t * 2 + 1];
+          if (seeds.every(s => Math.hypot(s[0] - sx, s[1] - sy) > 0.85)) seeds.push([sx, sy]);
+        }
+        const buckets = seeds.map(() => ({ p: [], n: [] }));
+        for (let t = 0; t < triCount; t++) {
+          let best = 0, bd = 1e9;
+          for (let s = 0; s < seeds.length; s++) {
+            // slight anisotropic jitter keeps cell walls from reading as
+            // perfectly straight Voronoi lines
+            const dx = cen[t * 2] - seeds[s][0], dy = cen[t * 2 + 1] - seeds[s][1];
+            const dd = dx * dx + dy * dy * 1.15 + Math.sin(cen[t * 2] * 3.1 + s) * 0.08;
+            if (dd < bd) { bd = dd; best = s; }
+          }
+          const i = t * 9;
+          for (let q = 0; q < 9; q++) { buckets[best].p.push(pos[i + q]); buckets[best].n.push(nor[i + q]); }
+        }
+        buckets.forEach((b, si) => {
+          if (!b.p.length) return;
+          let cx = 0, cy = 0, cz = 0; const nv = b.p.length / 3;
+          for (let i = 0; i < b.p.length; i += 3) { cx += b.p[i]; cy += b.p[i + 1]; cz += b.p[i + 2]; }
+          cx /= nv; cy /= nv; cz /= nv;
+          for (let i = 0; i < b.p.length; i += 3) { b.p[i] -= cx; b.p[i + 1] -= cy; b.p[i + 2] -= cz; }
+          const g = new THREE.BufferGeometry();
+          g.setAttribute('position', new THREE.Float32BufferAttribute(b.p, 3));
+          g.setAttribute('normal', new THREE.Float32BufferAttribute(b.n, 3));
+          const mesh = new THREE.Mesh(g, pkText.material);
+          mesh.frustumCulled = false;
+          const home = V(cx, cy, cz);
+          mesh.position.copy(home);
+          pkGroup.add(mesh);
+          const sr = rnd(500 + si);
+          shards.push({ mesh, home, gone: 99, r: [sr(), sr(), sr(), sr(), sr(), sr()],
+                        axis: V(sr() - 0.5, sr() - 0.5, sr() - 0.5).normalize() });
+        });
+        // removal order: each stage takes the cells nearest its impact point
+        for (let s = 1; s <= BT_STAGES; s++) {
+          const left = shards.filter(x => x.gone === 99);
+          left.sort((a, b) => a.home.distanceTo(IMPACT[s]) - b.home.distanceTo(IMPACT[s]));
+          left.slice(0, TAKE[s]).forEach(x => { x.gone = s; });
+        }
+        // loosening: cells that survive stage s get knocked a little out of
+        // true by every impact up to s (decays with distance)
+        shards.forEach((x, i) => {
+          x.loose = [];
+          for (let s = 0; s <= BT_STAGES; s++) {
+            const off = V(0, 0, 0); let ang = 0;
+            for (let k = 1; k <= s; k++) {
+              const w = Math.exp(-x.home.distanceToSquared(IMPACT[k]) / 10);
+              off.add(V(hash(i, k) - 0.5, hash(i, k + 9) - 0.5 - 0.35, (hash(i, k + 17) - 0.5) * 1.6).multiplyScalar(0.55 * w));
+              ang += (hash(i, k + 31) - 0.5) * 0.32 * w;
+            }
+            x.loose.push({ off, ang });
+          }
+        });
+        pkGroup.position.copy(PK);
+        scene.add(pkGroup);
+        pkText.visible = false;
+        console.log('[battle] shards', shards.length, 'tris', triCount);
+      }
+
+      /* ── fx primitives ─────────────────────────────────────────────── */
+      const glowTex = (() => {
+        const c = document.createElement('canvas'); c.width = c.height = 128;
+        const g = c.getContext('2d');
+        const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+        gr.addColorStop(0, 'rgba(255,255,255,1)');
+        gr.addColorStop(0.18, 'rgba(255,255,255,0.85)');
+        gr.addColorStop(0.45, 'rgba(255,255,255,0.25)');
+        gr.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+        const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+      })();
+      const fxRoot = new THREE.Group(); scene.add(fxRoot);
+      const makeGlow = () => {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffffff, transparent: true,
+          blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false, toneMapped: false }));
+        s.visible = false; s.renderOrder = 20; fxRoot.add(s); return s;
+      };
+      const beamMat = (kind) => new THREE.ShaderMaterial({
+        uniforms: { uCore: { value: new THREE.Color() }, uEdge: { value: new THREE.Color() }, uTime: { value: 0 },
+                    uInt: { value: 0 }, uKind: { value: kind }, uLen: { value: 1 } },
+        vertexShader: `varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+          void main(){ vUv = uv; vec4 mv = modelViewMatrix * vec4(position,1.0);
+            vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
+        fragmentShader: `uniform vec3 uCore; uniform vec3 uEdge; uniform float uTime; uniform float uInt;
+          uniform float uKind; uniform float uLen; varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+          void main(){
+            float f = abs(dot(normalize(vN), normalize(vV)));      // 1 at the beam's middle, 0 at its rim
+            float along = vUv.y * uLen;
+            float n = 0.5 + 0.5 * sin(along * 2.3 - uTime * 38.0 + vUv.x * 18.85)
+                    * sin(along * 0.9 - uTime * 21.0 - vUv.x * 12.57);
+            if (uKind > 2.5) n = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(along * 5.0 - uTime * 60.0 + sin(vUv.x * 25.1) * 1.6), 2.0);
+            float core = pow(f, 3.0);
+            vec3 col = mix(uEdge * (0.55 + 0.6 * n), uCore, core);
+            float a = (pow(f, 1.2) * (0.65 + 0.35 * n)) * uInt;
+            gl_FragColor = vec4(col * a, a);
+          }`,
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+        fog: false, toneMapped: false,
+      });
+      // unit beam: cylinder from y=0 to y=1, radius 1
+      const cylGeo = new THREE.CylinderGeometry(1, 1, 1, 28, 24, true).translate(0, 0.5, 0);
+      const helixGeo = (() => {
+        const pts = []; for (let i = 0; i <= 400; i++) { const u = i / 400; pts.push(V(Math.cos(u * TAU * 9) * 1.6, u, Math.sin(u * TAU * 9) * 1.6)); }
+        return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 600, 0.22, 8, false);
+      })();
+      const orbGeo = new THREE.SphereGeometry(1, 32, 20);
+      const _up = V(0, 1, 0), _d = V(0, 0, 0);
+      function placeSeg(mesh, a, b, r) {
+        _d.subVectors(b, a); const len = _d.length();
+        if (len < 1e-4) { mesh.visible = false; return; }
+        mesh.visible = true;
+        mesh.position.copy(a);
+        mesh.quaternion.setFromUnitVectors(_up, _d.normalize());
+        mesh.scale.set(r, len, r);
+        mesh.material.uniforms.uLen.value = len;
+      }
+      // a beam is two segments (mouth → pk impact, pk → target) so it
+      // visibly punches through the letters; plus optional helix strands
+      function makeBeam(kind, helix) {
+        const m = beamMat(kind), o = { m, segs: [], hel: [] };
+        for (let i = 0; i < 2; i++) { const s = new THREE.Mesh(cylGeo, m); s.frustumCulled = false; s.renderOrder = 15; s.visible = false; fxRoot.add(s); o.segs.push(s); }
+        if (helix) for (let i = 0; i < 2; i++) {
+          const hm = beamMat(kind); const h = new THREE.Mesh(helixGeo, hm); h.frustumCulled = false; h.renderOrder = 15; h.visible = false; fxRoot.add(h); o.hel.push(h);
+        }
+        return o;
+      }
+      const beams = { dp: makeBeam(1, false), hb: makeBeam(2, false), ab: makeBeam(1, true), hp: makeBeam(3, false) };
+      const orb = new THREE.Mesh(orbGeo, beamMat(1)); orb.visible = false; orb.renderOrder = 16; orb.frustumCulled = false; fxRoot.add(orb);
+      const glows = Array.from({ length: 6 }, makeGlow);
+      const flashLight = new THREE.PointLight(0xffffff, 0, 80, 1.6); scene.add(flashLight);
+      // full-frame flash, drawn in clip space on top of everything
+      const flashQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+        uniforms: { uCol: { value: new THREE.Color(1, 1, 1) }, uA: { value: 0 } },
+        vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
+        fragmentShader: 'uniform vec3 uCol; uniform float uA; void main(){ gl_FragColor = vec4(uCol * uA, uA); }',
+        transparent: true, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, toneMapped: false,
+      }));
+      flashQuad.frustumCulled = false; flashQuad.renderOrder = 999; scene.add(flashQuad);
+
+      // particles: one Points cloud, positions recomputed analytically
+      // from (seed, spawn time) every frame, so there is no sim state
+      const PMAX = 5000;
+      const pPos = new Float32Array(PMAX * 3), pCol = new Float32Array(PMAX * 4), pSize = new Float32Array(PMAX);
+      const pGeo = new THREE.BufferGeometry();
+      pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3).setUsage(THREE.DynamicDrawUsage));
+      pGeo.setAttribute('aCol', new THREE.BufferAttribute(pCol, 4).setUsage(THREE.DynamicDrawUsage));
+      pGeo.setAttribute('aSize', new THREE.BufferAttribute(pSize, 1).setUsage(THREE.DynamicDrawUsage));
+      const pMat = new THREE.ShaderMaterial({
+        uniforms: { uScale: { value: 1 } },
+        vertexShader: `attribute vec4 aCol; attribute float aSize; uniform float uScale; varying vec4 vC;
+          void main(){ vC = aCol; vec4 mv = modelViewMatrix * vec4(position,1.0);
+            gl_PointSize = aSize * uScale / max(0.1, -mv.z); gl_Position = projectionMatrix * mv; }`,
+        fragmentShader: `varying vec4 vC; void main(){ vec2 d = gl_PointCoord - 0.5; float r = length(d) * 2.0;
+            float a = smoothstep(1.0, 0.0, r); a *= a; gl_FragColor = vec4(vC.rgb * vC.a * a, vC.a * a); }`,
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, toneMapped: false,
+      });
+      const points = new THREE.Points(pGeo, pMat); points.frustumCulled = false; points.renderOrder = 18; scene.add(points);
+      let pN = 0;
+      const _c = new THREE.Color();
+      function emit(o) {
+        // o: seed, n, t0, t1 (spawn window), life, tau, at(u)->Vector3,
+        //    vel(r)->Vector3, col, size, grav, drag
+        for (let i = 0; i < o.n && pN < PMAX; i++) {
+          const r = rnd(o.seed * 1009 + i);
+          const r0 = r(), r1 = r(), r2 = r(), r3 = r();
+          const spawn = o.t0 + (o.t1 - o.t0) * (i / o.n);
+          const life = o.life * (0.6 + 0.8 * r0);
+          const age = o.tau - spawn;
+          if (age < 0 || age > life) continue;
+          const p = o.at(r1, spawn), v = o.pull ? o.pull.clone().sub(p).multiplyScalar(o.drag) : o.vel(r, spawn);
+          const k = o.drag || 0.0001;
+          const s = (1 - Math.exp(-k * age)) / k;
+          const g = o.grav || 0;
+          pPos[pN * 3] = p.x + v.x * s; pPos[pN * 3 + 1] = p.y + v.y * s - 0.5 * g * age * age; pPos[pN * 3 + 2] = p.z + v.z * s;
+          const f = age / life;
+          _c.set(o.col); if (o.col2) _c.lerp(new THREE.Color(o.col2), r2);
+          const a = (o.alpha || 1) * Math.min(1, age * 20) * (1 - f) * (1 - f * 0.3);
+          pCol[pN * 4] = _c.r; pCol[pN * 4 + 1] = _c.g; pCol[pN * 4 + 2] = _c.b; pCol[pN * 4 + 3] = a;
+          pSize[pN] = o.size * (0.5 + r3) * (o.grow ? 1 + f * o.grow : 1 - 0.5 * f);
+          pN++;
+        }
+      }
+
+      /* ── move table. tPk / tHit: when the shot reaches the pk / target. */
+      const MOVES = {
+        'ray-m1': { name: 'dragon pulse', beam: 'dp', core: 0xd8fff4, edge: 0x2be3c0, edge2: 0x8b5cff, tFire: 0.72, tPk: 0.98, tHit: 1.2, tOff: 1.7, r: 1.0, orb: true },
+        'ray-m2': { name: 'hyper beam',   beam: 'hb', core: 0xfff6e0, edge: 0xff7a1a, edge2: 0xffd27a, tFire: 0.8,  tPk: 0.9,  tHit: 1.0, tOff: 1.85, r: 1.35, charge: true },
+        'lug-m1': { name: 'aeroblast',    beam: 'ab', core: 0xe6eeff, edge: 0x4a6dff, edge2: 0xb8c8ff, tFire: 0.8,  tPk: 0.98, tHit: 1.15, tOff: 1.9, r: 0.9 },
+        'lug-m2': { name: 'hydro pump',   beam: 'hp', core: 0xbfe8ff, edge: 0x1266ff, edge2: 0x7fd0ff, tFire: 0.85, tPk: 1.02, tHit: 1.2, tOff: 1.8, r: 1.1, spray: true },
+      };
+
+      /* ── clip state ─────────────────────────────────────────────────── */
+      let clip = 'idle', stage = 0;
+      window.__capBattle = (o) => { clip = o.clip || 'idle'; stage = Math.max(0, Math.min(BT_STAGES, o.stage | 0)); return BT_T0; };
+      window.__battleState = () => ({ clip, stage, shards: shards.length });
+
+      const rqHome = L.ray.pos.clone().add(PK), lugHome = L.lug.pos.clone().add(PK);
+      const rqQ0 = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, L.ray.yaw, L.ray.roll));
+      const lugQ0 = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, L.lug.yaw, 0));
+      const tmpA = V(0, 0, 0), tmpB = V(0, 0, 0), mouth = V(0, 0, 0), target = V(0, 0, 0), pkHit = V(0, 0, 0);
+      let shake = 0;
+
+      function blink(mats, on) {
+        mats.forEach(({ m, e, i }) => {
+          if (on > 0) { m.emissive.setRGB(1, 1, 1); m.emissiveIntensity = on * 0.9; }
+          else { m.emissive.copy(e); m.emissiveIntensity = i; }
+        });
+      }
+
+      // Lugia clip weights: list of [key, localTime, weight]
+      function lugPose(list) {
+        for (const k in lugActs) lugActs[k].setEffectiveWeight(0);
+        let sum = 0; list.forEach(x => { sum += x[2]; });
+        list.forEach(([k, lt, w]) => {
+          const a = lugActs[k]; if (!a || w <= 0) return;
+          const d = clipLen[k];
+          a.time = Math.max(0, Math.min(d - 1e-4, lt));
+          a.setEffectiveWeight(w / (sum || 1));
+        });
+        lugMixer.update(0);
+      }
+      // battle-idle phase sampled so one loop of the clip spans BT_P
+      const lugIdle = (tau, w = 1) => ['battlewait01_loop', ((tau % BT_P + BT_P) % BT_P) / BT_P * clipLen['battlewait01_loop'], w];
+
+      /* ── Rayquaza bones: periodic idle + additive action layers ───── */
+      // static S-bend layered under the idle so the serpent reads as coiled
+      // and ready rather than lying flat
+      const COIL_Y = 0.04, COIL_X = 0.25;
+      function rayBones(tau, act) {
+        const N = bodyChain.length, k = 0.62;
+        const sp = act.spasm || 0, limp = act.limp || 0;
+        for (let i = 0; i < N; i++) {
+          const b = bodyChain[i]; if (!b || !b.userData.rest) continue;
+          const u = i / Math.max(1, N - 1);
+          const amp = (0.08 + 0.28 * u) * (1 - limp * 0.7);
+          const axp = 0.04 + 0.13 * u;
+          const wave = Math.sin(W * tau - k * i) * 0.85 + Math.sin(2 * W * tau - k * 1.3 * i + 0.7) * 0.15;
+          b.rotation.y = b.userData.rest.y + wave * amp + COIL_Y * Math.sin(i * 0.55 + 0.4) * (i > 2 ? 1 : 0);
+          b.rotation.x = b.userData.rest.x + Math.sin(W * tau - k * i + Math.PI / 2) * axp * 0.7 + COIL_X * Math.sin(i * 0.4) * (i > 2 ? 1 : 0);
+          b.rotation.z = b.userData.rest.z + Math.sin(W * tau - 0.7 * k * i) * amp * 0.35;
+          if (sp > 0) {
+            const uu = u * u * (0.25 + 0.75 * u);
+            b.rotation.y += (Math.sin(26 * tau + i * 1.7) * 0.55 + Math.sin(17 * tau - i * 2.3) * 0.3) * 0.5 * uu * sp;
+            b.rotation.x += Math.sin(21 * tau - i * 1.3 + 2.1) * 0.25 * uu * sp - sp * uu * 0.4;
+          }
+          if (limp > 0) { b.rotation.x += limp * 0.22 * (0.4 + u); b.rotation.z += limp * Math.sin(i * 0.9) * 0.15; }
+        }
+        for (let i = 0; i < 3; i++) {
+          const b = bodyChain[i]; if (!b || !b.userData.rest) continue;
+          const fo = i === 0 ? 1 : i === 1 ? 0.7 : 0.45;
+          b.rotation.y += Math.sin(W * tau + i * 0.4) * 0.12 * fo;
+          b.rotation.x += Math.sin(W * tau + 1 + i * 0.25) * 0.06 * fo;
+        }
+        if (rqHead && rqHead.userData.rest) { rqHead.rotation.x += act.headX || 0; rqHead.rotation.y += act.headY || 0; }
+        if (rqNeck && rqNeck.userData.rest) rqNeck.rotation.x += (act.headX || 0) * 0.55;
+        if (jaw) jaw.rotation.x = jaw.userData.rest.x + 0.06 + Math.sin(W * tau) * 0.05 + (act.jaw || 0);
+        const sway = Math.sin(W * tau) * 0.18 + (act.arms || 0);
+        arms.L.forEach((b, i) => { b.rotation.z = b.userData.rest.z + sway * (1 + i * 0.3); });
+        arms.R.forEach((b, i) => { b.rotation.z = b.userData.rest.z - sway * (1 + i * 0.3); });
+      }
+
+      // roar: the hero's cry shape (rear back, snap forward, hold open)
+      function roar(x) {
+        if (x <= 0 || x >= 1) return { headX: 0, jaw: 0, back: 0 };
+        const ant = smooth(x / 0.1), snap = smooth((x - 0.1) / 0.1), rel = smooth((x - 0.8) / 0.2);
+        const headX = (0.22 * ant - 0.5 * snap) * (1 - rel);
+        const jawO = (0.3 * ant + 0.6 * snap) * (1 - rel) * (1 + 0.08 * Math.sin(x * 60));
+        return { headX, jaw: jawO, back: (0.7 * ant - 1.6 * snap) * (1 - rel) };
+      }
+
+      const _dir = V(0, 0, 0), _q = new THREE.Quaternion(), _e = new THREE.Euler();
+      function headPoint(out) {
+        rqHead.getWorldPosition(out);
+        rqNeck.getWorldPosition(tmpA);
+        _d.subVectors(out, tmpA).normalize();
+        return out.addScaledVector(_d, 1.6 * L.ray.scale);
+      }
+      function lugMouth(out) {
+        // the rig faces +z; push forward of the head bone to the beak
+        if (lugHead) { lugHead.getWorldPosition(out); return out.addScaledVector(_dir.set(0, 0, 1).applyQuaternion(lugPivot.quaternion), 1.4); }
+        return out.copy(lugPivot.position).add(V(0, 2, 0));
+      }
+      const rayBody = (out) => { (rqTailRoot || rqHead).getWorldPosition(out); return out; };
+      const lugBody = (out) => { if (lugChest) lugChest.getWorldPosition(out); else out.copy(lugPivot.position); return out; };
+
+      /* ── per-frame ──────────────────────────────────────────────────── */
+      function tick(tAbs) {
+        if (!lug) return;
+        const tau = tAbs - BT_T0;
+        pN = 0; shake = 0;
+        let rqOff = V(0, 0, 0), rqRot = V(0, 0, 0), rqAct = {}, rqVis = true, rqBlink = 0;
+        let lugOff = V(0, 0, 0), lugRot = V(0, 0, 0), lugList = [lugIdle(tau)], lugVis = true, lugBlink = 0;
+        let flash = 0, flashCol = 0xffffff, light = 0, lightCol = 0xffffff;
+        Object.values(beams).forEach(b => { b.segs.forEach(s => s.visible = false); b.hel.forEach(h => h.visible = false); });
+        orb.visible = false; glows.forEach(g => g.visible = false);
+
+        // shard pose for this clip: static at `stage`, or breaking s → s+1
+        let breakT = -1, breakDir = V(1, 0, 0), from = stage, to = stage;
+        const mv = MOVES[clip];
+        if (mv) { to = Math.min(BT_STAGES, stage + 1); breakT = mv.tPk; }
+
+        if (clip === 'intro') {
+          const e1 = 1 - smooth(win(tau, 0.0, 2.6)), e2 = 1 - smooth(win(tau, 0.5, 3.0));
+          rqOff.set(-34 * e1, -6 * e1, 0); rqRot.z = 0.5 * e1;
+          lugOff.set(16 * e2, 26 * e2, -10 * e2);
+          const ro = roar(win(tau, 2.4, 3.9)); rqAct = { headX: ro.headX, jaw: ro.jaw }; rqOff.x += ro.back * 0.4;
+          const wR = bump(tau, 1.5, 1.75, 3.85);
+          lugList = [lugIdle(tau, 1 - wR + 1e-3), ['roar01', (tau - 1.5), wR]];
+        } else if (clip === 'win-ray') { lugVis = false; }
+        else if (clip === 'win-lug') { rqVis = false; }
+        else if (clip === 'ray-faint' || clip === 'lug-faint') {
+          const rayDies = clip === 'ray-faint';
+          const fall = smooth(win(tau, 0.6, 3.1));
+          if (rayDies) {
+            rqAct = { limp: smooth(win(tau, 0.1, 1.2)), jaw: 0.5 * smooth(win(tau, 0.1, 0.8)), headX: 0.3 * smooth(win(tau, 0.1, 1.2)) };
+            rqOff.set(-2 * fall, -40 * fall * fall, -4 * fall); rqRot.z = -0.9 * fall; rqRot.x = 0.4 * fall;
+            rqVis = tau < 3.6;
+            const wR = bump(tau, 1.2, 1.45, 3.7);
+            lugList = [lugIdle(tau, 1 - wR + 1e-3), ['roar01', tau - 1.2, wR]];
+          } else {
+            const dl = clipLen['down01_start'];
+            const wD = smooth(win(tau, 0.0, 0.25));
+            lugList = [lugIdle(tau, 1 - wD + 1e-3), tau < dl ? ['down01_start', tau, wD] : ['down01_loop', (tau - dl) % clipLen['down01_loop'], wD]];
+            lugOff.set(4 * fall, -52 * fall * fall, -10 * fall); lugRot.z = 0.5 * fall;
+            lugVis = tau < 3.6;
+            const ro = roar(win(tau, 1.2, 2.9)); rqAct = { headX: ro.headX, jaw: ro.jaw }; rqOff.x += ro.back * 0.5;
+          }
+        } else if (mv) {
+          const rayAtk = clip.startsWith('ray');
+          // attacker windup / fire / recover
+          if (rayAtk) {
+            const wind = smooth(win(tau, 0.0, mv.tFire)), fire = smooth(win(tau, mv.tFire, mv.tFire + 0.12)), rec = smooth(win(tau, mv.tOff, mv.tOff + 1.4));
+            const pull = wind * (1 - fire), push = fire * (1 - rec);
+            rqOff.set(-1.2 * pull + 2.2 * push, 0.6 * pull, 0);
+            rqAct = { headX: 0.25 * pull - 0.45 * push, jaw: 0.35 * wind * (1 - rec) + 0.55 * push, arms: 0.4 * wind * (1 - rec) };
+          } else {
+            if (clip === 'lug-m1') {
+              const s0 = clipLen['rangeattack02_start'], l0 = clipLen['rangeattack02_loop'], e0 = clipLen['rangeattack02_end'];
+              const tEnd = 1.95;
+              const wA = 1 - smooth(win(tau, tEnd + e0 - 0.35, tEnd + e0));
+              const wIn = smooth(win(tau, 0, 0.15));
+              const k = tau < s0 ? ['rangeattack02_start', tau] : tau < tEnd ? ['rangeattack02_loop', (tau - s0) % l0] : ['rangeattack02_end', tau - tEnd];
+              lugList = [lugIdle(tau, 1 - wA * wIn + 1e-3), [k[0], k[1], wA * wIn]];
+            } else {
+              const d = clipLen['rangeattack01'];
+              const wA = smooth(win(tau, 0, 0.15)) * (1 - smooth(win(tau, d - 0.35, d)));
+              lugList = [lugIdle(tau, 1 - wA + 1e-3), ['rangeattack01', tau, wA]];
+            }
+            const fire = smooth(win(tau, mv.tFire, mv.tFire + 0.15)) * (1 - smooth(win(tau, mv.tOff, mv.tOff + 0.8)));
+            lugOff.set(-1.2 * fire, 0, 0.6 * fire);
+          }
+          // defender reaction
+          const hitT = tau - mv.tHit;
+          const react = hitT > 0 ? Math.exp(-hitT * 2.2) * Math.min(1, hitT * 14) * (1 - smooth(win(hitT, 1.4, 2.2))) : 0;
+          const blinkOn = hitT > 0 && hitT < 0.75 && Math.floor(hitT * 12) % 2 === 0 ? 1 : 0;
+          if (rayAtk) {
+            const dmg = mv.beam === 'hb' ? 'damage02' : 'damage01';
+            const dd = clipLen[dmg];
+            const wD = hitT > 0 ? smooth(hitT / 0.08) * (1 - smooth((hitT - dd + 0.3) / 0.3)) : 0;
+            lugList = [lugIdle(tau, 1 - wD + 1e-3), [dmg, Math.max(0, hitT), wD]];
+            lugOff.set(3.2 * react, 0.6 * react, -1.6 * react);
+            lugBlink = blinkOn;
+          } else {
+            rqOff.set(-3.4 * react, -0.6 * react, 0.8 * react);
+            rqRot.z = -0.25 * react;
+            rqAct = { spasm: react, jaw: 0.4 * react, headX: 0.3 * react };
+            rqBlink = blinkOn;
+          }
+
+          // ── the shot ──
+          // mouth / target come from the posed rigs, so pose those first
+          applyRay(tau, rqOff, rqRot, rqAct, rqVis, rqBlink);
+          applyLug(tau, lugOff, lugRot, lugList, lugVis, lugBlink);
+          if (rayAtk) { headPoint(mouth); lugBody(target); } else { lugMouth(mouth); rayBody(target); }
+          pkHit.copy(IMPACT[Math.min(to, BT_STAGES)]).add(PK);
+          if (stage >= BT_STAGES) pkHit.copy(PK).add(V(0, 0.5, 0));
+          breakDir.subVectors(target, mouth).normalize();
+          const on = smooth(win(tau, mv.tFire, mv.tFire + 0.06)) * (1 - smooth(win(tau, mv.tOff, mv.tOff + 0.3)));
+          const len1 = mouth.distanceTo(pkHit), len2 = pkHit.distanceTo(target);
+          const reach = win(tau, mv.tFire, mv.tHit) * (len1 + len2);
+          const B = beams[mv.beam];
+          B.m.uniforms.uCore.value.set(mv.core); B.m.uniforms.uEdge.value.set(mv.edge);
+          B.m.uniforms.uTime.value = tau; B.m.uniforms.uInt.value = on * (mv.beam === 'hb' ? 1.3 : mv.beam === 'dp' ? 1.1 : 0.7);
+          const R = mv.r * (1 + 0.12 * Math.sin(tau * 47)) * (mv.beam === 'hp' ? 1 + 0.18 * Math.sin(tau * 31 + 1) : 1);
+          const tip = V(0, 0, 0);
+          if (mv.orb) {
+            // dragon pulse: an orb flies the path, the beam is its trail
+            const tailReach = Math.max(0, reach - 7);
+            const pt = (d, out) => d <= len1 ? out.lerpVectors(mouth, pkHit, d / len1) : out.lerpVectors(pkHit, target, Math.min(1, (d - len1) / len2));
+            pt(reach, tip); pt(tailReach, tmpA);
+            if (on > 0.01 && tau < mv.tHit + 0.05) {
+              if (tailReach < len1 && reach > len1) { placeSeg(B.segs[0], tmpA, pkHit, R); placeSeg(B.segs[1], pkHit, tip, R); }
+              else placeSeg(B.segs[0], tmpA, tip, R);
+              orb.visible = true; orb.position.copy(tip); orb.scale.setScalar(1.7 + 0.25 * Math.sin(tau * 40));
+              orb.material.uniforms.uCore.value.set(mv.core); orb.material.uniforms.uEdge.value.set(mv.edge);
+              orb.material.uniforms.uInt.value = 1.5; orb.material.uniforms.uTime.value = tau;
+              const g = glows[2]; g.visible = true; g.position.copy(tip); g.scale.setScalar(9); g.material.color.set(mv.edge); g.material.opacity = 0.9;
+            }
+            emit({ seed: 11, n: 260, t0: mv.tFire, t1: mv.tHit, life: 0.55, tau,
+              at: (u, sp) => { const d = win(sp, mv.tFire, mv.tHit) * (len1 + len2); return pt(d, V(0, 0, 0)); },
+              vel: (r) => V(r() - 0.5, r() - 0.5, r() - 0.5).multiplyScalar(6), col: mv.edge, col2: mv.edge2, size: 1.1, drag: 2.5 });
+          } else if (on > 0.01) {
+            if (reach <= len1) placeSeg(B.segs[0], mouth, tip.lerpVectors(mouth, pkHit, reach / len1), R);
+            else { placeSeg(B.segs[0], mouth, pkHit, R); placeSeg(B.segs[1], pkHit, tip.lerpVectors(pkHit, target, Math.min(1, (reach - len1) / len2)), R * 0.92); }
+            B.hel.forEach((h, i) => {
+              h.material.uniforms.uCore.value.set(mv.edge2); h.material.uniforms.uEdge.value.set(mv.edge);
+              h.material.uniforms.uTime.value = tau; h.material.uniforms.uInt.value = on * 0.55;
+              placeSeg(h, mouth, reach <= len1 ? tip : target, R * (i ? 0.75 : 1.05));
+              if (reach > len1) { h.quaternion.setFromUnitVectors(_up, _d.subVectors(target, mouth).normalize()); h.scale.y = mouth.distanceTo(target) * Math.min(1, reach / (len1 + len2)); }
+              h.rotateY(tau * (i ? -14 : 11) + i * 1.3);
+            });
+            const g = glows[2]; g.visible = true; g.position.copy(mouth); g.scale.setScalar(4.2 * R + 0.8 * Math.sin(tau * 30)); g.material.color.set(mv.edge); g.material.opacity = on;
+            if (mv.spray) {
+              emit({ seed: 21, n: 700, t0: mv.tFire, t1: mv.tOff, life: 0.5, tau,
+                at: (u) => tmpB.lerpVectors(mouth, reach <= len1 ? tip : target, u * Math.min(1, reach / (len1 + len2))).clone(),
+                vel: (r) => V(r() - 0.5, r() - 0.3, r() - 0.5).multiplyScalar(9), col: 0xbfe6ff, col2: mv.edge, size: 0.8, grav: 9, drag: 1.5 });
+            }
+          }
+          if (mv.charge) {
+            // hyper beam: a ball gathers at the mouth first
+            const c = smooth(win(tau, 0.15, mv.tFire)) * (1 - smooth(win(tau, mv.tFire, mv.tFire + 0.25)));
+            if (c > 0.01) {
+              const g = glows[3]; g.visible = true; g.position.copy(mouth); g.scale.setScalar(1.5 + 4.5 * c + Math.sin(tau * 50) * 0.4); g.material.color.set(mv.edge); g.material.opacity = 1;
+              emit({ seed: 31, n: 160, t0: 0.1, t1: mv.tFire, life: 0.4, tau,
+                at: (u) => mouth.clone().add(V(Math.cos(u * 40), Math.sin(u * 53), Math.cos(u * 71)).multiplyScalar(6)),
+                // drag-limited pull: with k = 6 every mote lands on the mouth
+                vel: () => V(0, 0, 0), col: mv.edge2, size: 0.9, grow: -0.6, drag: 6, pull: mouth });
+              light = Math.max(light, 4 * c); lightCol = mv.edge;
+            }
+            shake = Math.max(shake, 0.12 * c);
+          }
+          // impacts: pk then target
+          const pkT = tau - mv.tPk, hT = tau - mv.tHit;
+          if (pkT > 0 && pkT < 0.6) {
+            const g = glows[0]; g.visible = true; g.position.copy(pkHit); g.scale.setScalar(9 * (1 - pkT / 0.6) + 2); g.material.color.set(mv.edge2); g.material.opacity = 1 - pkT / 0.6;
+          }
+          emit({ seed: 41 + stage, n: 220, t0: mv.tPk, t1: mv.tPk + 0.05, life: 1.0, tau,
+            at: () => pkHit.clone(), vel: (r) => V(r() - 0.5, r() - 0.5, r() - 0.5).normalize().multiplyScalar(6 + 16 * r()).addScaledVector(breakDir, 8),
+            col: 0xffffff, col2: mv.edge2, size: 0.7, grav: 6, drag: 1.2 });
+          if (hT > 0 && hT < 0.7) {
+            const g = glows[1]; g.visible = true; g.position.copy(target); g.scale.setScalar(11 * (1 - hT / 0.7) + 3); g.material.color.set(mv.edge); g.material.opacity = 1 - hT / 0.7;
+          }
+          emit({ seed: 51 + stage, n: 260, t0: mv.tHit, t1: mv.tHit + 0.06, life: 0.9, tau,
+            at: () => target.clone(), vel: (r) => V(r() - 0.5, r() - 0.5, r() - 0.5).normalize().multiplyScalar(5 + 14 * r()),
+            col: mv.edge, col2: mv.core, size: 1.3, drag: 2.2 });
+          flash = Math.max(flash, 0.10 * Math.exp(-Math.max(0, pkT) * 12) * (pkT > 0 ? 1 : 0), 0.16 * Math.exp(-Math.max(0, hT) * 10) * (hT > 0 ? 1 : 0));
+          flashCol = mv.core;
+          light = Math.max(light, on * (mv.beam === 'hb' ? 30 : 18)); lightCol = mv.edge;
+          shake = Math.max(shake, (mv.beam === 'hb' ? 0.55 : 0.35) * (hT > 0 ? Math.exp(-hT * 3) * (1 - smooth(win(hT, 1.0, 1.8))) : 0) + 0.12 * on);
+          flashLight.position.copy(hT > 0 ? target : pkHit);
+        }
+
+        if (!mv) { applyRay(tau, rqOff, rqRot, rqAct, rqVis, rqBlink); applyLug(tau, lugOff, lugRot, lugList, lugVis, lugBlink); }
+        poseShards(tau, from, to, breakT, breakDir);
+        flashLight.intensity = light; flashLight.color.set(lightCol);
+        flashQuad.material.uniforms.uA.value = flash; flashQuad.material.uniforms.uCol.value.set(flashCol);
+        pGeo.attributes.position.needsUpdate = true; pGeo.attributes.aCol.needsUpdate = true; pGeo.attributes.aSize.needsUpdate = true;
+        pGeo.setDrawRange(0, pN);
+        pMat.uniforms.uScale.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+        window.__lastShake = shake;
+      }
+
+      function applyRay(tau, off, rot, act, vis, bl) {
+        model.visible = vis;
+        rayBones(tau, act);
+        rqPivot.position.copy(rqHome).add(off);
+        rqPivot.position.x += Math.sin(W * tau + 1.0) * 0.3;
+        rqPivot.position.y += Math.sin(W * tau) * 0.45;
+        rqPivot.quaternion.copy(rqQ0);
+        _q.setFromEuler(_e.set(rot.x + Math.sin(W * tau + 0.6) * 0.03, rot.y, rot.z + Math.sin(W * tau) * 0.05));
+        rqPivot.quaternion.multiply(_q);
+        rqPivot.scale.setScalar(L.ray.scale);
+        blink(rqMats, bl);
+        rqPivot.updateMatrixWorld(true);
+      }
+      function applyLug(tau, off, rot, list, vis, bl) {
+        lug.visible = vis;
+        lugPose(list);
+        lugPivot.position.copy(lugHome).add(off);
+        lugPivot.position.y += Math.sin(W * tau + 0.4) * 0.35;
+        lugPivot.quaternion.copy(lugQ0);
+        _q.setFromEuler(_e.set(rot.x, rot.y, rot.z));
+        lugPivot.quaternion.multiply(_q);
+        blink(lugMats, bl);
+        lugPivot.updateMatrixWorld(true);
+      }
+
+      function poseShards(tau, from, to, breakT, dir) {
+        const dt = breakT >= 0 ? tau - breakT : -1;
+        const jolt = dt > 0 ? Math.exp(-dt * 5) * Math.sin(dt * 55) * 0.18 : 0;
+        const settle = dt > 0 ? smooth(dt / 0.35) : 0;
+        shards.forEach((x, i) => {
+          const m = x.mesh;
+          if (x.gone <= from) { m.visible = false; return; }
+          m.visible = true;
+          const A = x.loose[from], B = x.loose[Math.min(to, BT_STAGES)];
+          if (x.gone <= to && to > from && dt > 0) {
+            // blasted: fly along the shot, outward from the impact, spin, shrink
+            const r = x.r;
+            const out = V(x.home.x - IMPACT[to].x, x.home.y - IMPACT[to].y, 0).normalize();
+            const v = dir.clone().multiplyScalar(10 + 14 * r[0]).addScaledVector(out, 5 + 7 * r[1]).add(V(0, 3 + 4 * r[2], (r[3] - 0.3) * 10));
+            const k = 0.7, s = (1 - Math.exp(-k * dt)) / k;
+            m.position.copy(x.home).add(A.off).addScaledVector(v, s); m.position.y -= 3 * dt * dt;
+            m.quaternion.setFromAxisAngle(x.axis, A.ang + dt * (5 + 9 * r[4]));
+            const sc = 1 - smooth((dt - 0.6) / 1.1);
+            m.scale.setScalar(Math.max(0.001, sc));
+            if (sc <= 0.001) m.visible = false;
+            return;
+          }
+          m.scale.setScalar(1);
+          const off = A.off.clone().lerp(B.off, settle), ang = A.ang + (B.ang - A.ang) * settle;
+          m.position.copy(x.home).add(off);
+          m.position.x += jolt * (x.r[0] - 0.5); m.position.y += jolt * (x.r[1] - 0.5);
+          m.quaternion.setFromAxisAngle(x.axis, ang + jolt * 0.2);
+        });
+      }
+
+      const _shk = V(0, 0, 0);
+      function cam(tAbs) {
+        const tau = tAbs - BT_T0;
+        const k = clip === 'intro' ? 1 + (CAM_K - 1) * smooth(win(tau, 0.2, 2.4)) : CAM_K;
+        if (k !== 1) { _shk.subVectors(camera.position, _camTarget); camera.position.copy(_camTarget).addScaledVector(_shk, k); }
+        const s = window.__lastShake || 0;
+        if (s <= 0) return;
+        _shk.set(Math.sin(tau * 61) * 0.6 + Math.sin(tau * 37 + 1) * 0.4, Math.sin(tau * 53 + 2) * 0.6 + Math.sin(tau * 29) * 0.4, 0).multiplyScalar(s);
+        camera.position.add(_shk);
+        camera.rotation.z += Math.sin(tau * 43) * 0.006 * s;
+      }
+
+      battle = { tick, camera: cam };
+    }
+
     /* ── animate ──────────────────────────────────────────────────── */
     const clock = new THREE.Clock();
     if (CAP) {
@@ -3441,12 +4164,16 @@
       // it — the RAF loop itself stops on the NEXT call (see the
       // qgFrozen check at the top of tick(), above).
       if (qgFrozen) return;
-      const t = clock.getElapsedTime();
+      // battle: the world (nebula, stars, glass shimmer) is frozen so every
+      // battle clip can cut to any other on a shared idle phase; only the
+      // creatures, the pk shards and the move effects run on the clock.
+      const tReal = clock.getElapsedTime();
+      const t = BATTLE ? 7.0 : tReal;
       // mixer delta — independent of window.__lastT (which the lightning
       // block also uses). clamped so a tab-resume / throttle gap doesn't
       // fast-forward the baked clip by seconds.
       const mixDt = Math.min(0.05, t - (window.__mixerLastT ?? t));
-      window.__mixerLastT = t;
+      window.__mixerLastT = tReal;
 
       // sample audio amplitude once per frame, share across reactives
       const amp = window.__audio ? window.__audio.getAmp() : 0;
@@ -3843,7 +4570,7 @@
         }
       }
 
-      if (currentPokemon === 'rayquaza' && model) {
+      if (currentPokemon === 'rayquaza' && model && !BATTLE) {
         // handle a forwarded click: raycast against the model; on a hit,
         // toggle FLIGHT MODE — Rayquaza launches into a path-following flight
         // circuit around the letters (see the trail rig below).
@@ -4432,9 +5159,13 @@
       // right). Shifting camera + target left by the same amount slides
       // the whole composition right on screen without changing the view
       // direction.
+      if (BATTLE && battle) battle.tick(tReal);
+
       camera.position.set(modelCenter.x + CAM_X_SHIFT, modelCenter.y + 4, modelCenter.z + CAM_DIST);
       _camTarget.set(modelCenter.x + CAM_X_SHIFT, modelCenter.y, modelCenter.z);
-      if (NO_POKE) {
+      // battle keeps the ?poke=0 framing so the intro cuts in from the
+      // idle hero without a camera jump
+      if (NO_POKE || BATTLE) {
         // ?poke=0: no creature to balance against, and the page sets an
         // HTML tagline under the pk, so frame the letters themselves and
         // lift them PK_LIFT of frame height above center. pkText is
@@ -4451,6 +5182,7 @@
         camera.position.z += k * 4;        _camTarget.z += k * 4;
       }
       camera.lookAt(_camTarget);
+      if (BATTLE && battle) battle.camera(tReal);
 
       // (audio-reactive bloom pulse REMOVED along with UnrealBloomPass —
       // see the composer setup above. The glass shader's own uPulse-driven

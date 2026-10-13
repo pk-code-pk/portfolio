@@ -482,6 +482,88 @@
       #hero-bar { bottom: 16px; }
     }
 
+    /* ─── hidden battle (konami code / 5 quick taps on the pk) ───────
+       Rayquaza vs Lugia over pre-baked clips (hero-video/battle/). The
+       overlay lives inside the hero, so it scrolls away with it; same
+       glass as #hero-bar. While it runs the hero bar and the tagline
+       step aside. */
+    .bt-vid.cut { transition: none !important; }
+    .hero-3d .bt {
+      position: absolute; inset: 0; z-index: 900;
+      pointer-events: none; opacity: 0; transition: opacity .5s ease;
+      font-family: 'Hanken Grotesk', sans-serif; color: rgba(255,255,255,.92);
+      text-transform: lowercase;
+    }
+    .hero-3d .bt.on { opacity: 1; }
+    .hero-3d.in-battle .hero-pk-tag { opacity: 0; transition: opacity .4s ease; }
+    body.in-battle #hero-bar { opacity: 0; pointer-events: none; }
+    .bt-glass {
+      background: rgba(10, 12, 22, 0.55);
+      backdrop-filter: blur(14px) saturate(120%);
+      -webkit-backdrop-filter: blur(14px) saturate(120%);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .bt-card {
+      position: absolute; width: min(250px, 46vw); padding: 10px 14px 9px;
+      border-radius: 16px;
+    }
+    .bt-foe { top: calc(var(--nav-h) + 20px); right: max(16px, 5vw); }
+    .bt-me  { bottom: 168px; left: max(16px, 5vw); }
+    .bt-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .bt-name { font-weight: 700; font-size: 14px; letter-spacing: .04em; }
+    .bt-lv { font-weight: 600; font-size: 11px; letter-spacing: .12em; color: rgba(255,255,255,.55); }
+    .bt-hp {
+      position: relative; height: 6px; margin: 8px 0 6px; border-radius: 999px;
+      background: rgba(255,255,255,.1); overflow: hidden;
+    }
+    .bt-hp i {
+      position: absolute; inset: 0; transform-origin: left center; border-radius: inherit;
+      background: linear-gradient(90deg, #4ef0a3, #7dffb4);
+      transition: transform .9s cubic-bezier(.3,.7,.3,1), background .4s;
+    }
+    .bt-hp i.mid { background: linear-gradient(90deg, #f5c84b, #ffe07d); }
+    .bt-hp i.low { background: linear-gradient(90deg, #ff5d5d, #ff8a7a); }
+    .bt-num { font-weight: 600; font-size: 11px; letter-spacing: .1em; text-align: right;
+              color: rgba(255,255,255,.6); font-variant-numeric: tabular-nums; }
+    .bt-box {
+      position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
+      width: min(560px, calc(100% - 32px)); padding: 14px 16px 14px;
+      border-radius: 20px; pointer-events: auto;
+    }
+    .bt-text { margin: 0 2px 12px; min-height: 1.5em; font-weight: 500; font-size: 15px;
+               line-height: 1.5; letter-spacing: .01em; }
+    .bt-acts { display: flex; gap: 8px; }
+    .bt-acts[hidden] { display: none; }
+    .bt-acts button {
+      flex: 1 1 0; min-width: 0; padding: 10px 12px; border-radius: 12px; cursor: pointer;
+      background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+      color: #fff; font: 600 13px/1.2 'Hanken Grotesk', sans-serif; letter-spacing: .04em;
+      text-transform: lowercase; text-align: left;
+      display: flex; flex-direction: column; gap: 3px;
+      transition: background .2s, border-color .2s, transform .15s;
+    }
+    .bt-acts button small { font-weight: 600; font-size: 10px; letter-spacing: .14em; color: rgba(255,255,255,.5); }
+    .bt-acts button:hover:not(:disabled) { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.22); }
+    .bt-acts button:active:not(:disabled) { transform: scale(.97); }
+    .bt-acts button:disabled { opacity: .4; cursor: default; }
+    .bt-acts .bt-run { flex: 0 0 auto; justify-content: center; text-align: center; color: rgba(255,255,255,.7); }
+    .bt-acts button[data-m="1"] small { color: #7af0d6; }
+    .bt-acts button[data-m="2"] small { color: #ffc27a; }
+    @media (orientation: portrait) {
+      .bt-foe { left: 16px; right: auto; }
+      .bt-me  { right: 16px; left: auto; bottom: 178px; }
+    }
+    @media (max-width: 480px) {
+      .bt-box { bottom: 16px; padding: 12px 12px; }
+      .bt-text { font-size: 14px; margin-bottom: 10px; }
+      .bt-acts { gap: 6px; }
+      .bt-acts button { padding: 9px 10px; font-size: 12px; }
+      .bt-card { width: 150px; padding: 7px 10px 6px; border-radius: 13px; }
+      .bt-hp { margin: 6px 0 4px; height: 5px; }
+      .bt-name { font-size: 12px; }
+      .bt-lv, .bt-num { font-size: 10px; }
+    }
+
     /* ─── (original) hero ─── */
     .hero {
       min-height: 100dvh;
@@ -1922,6 +2004,32 @@
     allow="autoplay; fullscreen"
     loading="eager"
     frameborder="0"></iframe>
+  <!-- hidden battle overlay (see the BATTLE controller near the video
+       hero script); inert until the konami code or 5 quick taps on the pk -->
+  <div class="bt" id="bt" hidden>
+    <div class="bt-card bt-glass bt-foe" aria-label="lugia">
+      <div class="bt-row"><span class="bt-name">lugia</span><span class="bt-lv">lv 70</span></div>
+      <div class="bt-hp"><i id="bt-hp-lug"></i></div>
+      <div class="bt-num"><span id="bt-num-lug">100</span> / 100</div>
+    </div>
+    <div class="bt-card bt-glass bt-me" aria-label="rayquaza">
+      <div class="bt-row"><span class="bt-name">rayquaza</span><span class="bt-lv">lv 70</span></div>
+      <div class="bt-hp"><i id="bt-hp-ray"></i></div>
+      <div class="bt-num"><span id="bt-num-ray">100</span> / 100</div>
+    </div>
+    <div class="bt-box bt-glass">
+      <p class="bt-text" id="bt-text" aria-live="polite"></p>
+      <div class="bt-acts" id="bt-moves" hidden>
+        <button data-m="1">dragon pulse<small>dragon</small></button>
+        <button data-m="2">hyper beam<small>normal</small></button>
+        <button class="bt-run" data-act="run">run</button>
+      </div>
+      <div class="bt-acts" id="bt-end" hidden>
+        <button class="bt-run" data-act="rematch">rematch</button>
+        <button class="bt-run" data-act="exit">exit</button>
+      </div>
+    </div>
+  </div>
   <p class="hero-pk-tag"><span>i’m praneel. i study cs at <b>harvard</b> and work across <b>design&nbsp;and&nbsp;engineering</b>: ui/ux, agent infrastructure, computer-use automation, and full-stack ai products. i’ve interned at <b>janet.ai</b> and <b>indeed</b>, built and <b>sold&nbsp;an&nbsp;app</b>, and run a product with <b>paying&nbsp;users</b> on the side.</span></p>
 </section>
 
@@ -3637,11 +3745,275 @@
       swapTo(EGG[egg].clip);
     });
 
+
+    // ── hidden battle: konami code, or 5 quick taps on the pk ─────────
+    //    Rayquaza (you) vs Lugia (cpu) over pre-baked clips in
+    //    hero-video/battle/ (tools/bake.mjs battle-*). Every clip starts
+    //    and ends on the scene's shared 2s idle phase, so clips CUT into
+    //    each other with no crossfade: a clip ending at pk stage s hands
+    //    straight to any clip starting at s. Loops (idle, win) hand off
+    //    only at their wrap point, so a picked move starts within 2s.
+    //    The whole exchange is rolled when you pick, so exactly the clips
+    //    it needs preload while the current one plays.
+    let battleMedia = null;   // pause/resume hook for __heroVideoAction
+    (function battleEgg() {
+      const root = document.getElementById('bt');
+      if (!root) return;
+      const $ = (id) => document.getElementById(id);
+      const textEl = $('bt-text'), movesEl = $('bt-moves'), endEl = $('bt-end');
+      const bsrc = (name) => `hero-video/battle/${name}-${ORIENT}${EXT}`;
+      // when each move's shot lands (clip seconds), from the scene's MOVES
+      const HIT = { 'ray-m1': 1.2, 'ray-m2': 1.0, 'lug-m1': 1.15, 'lug-m2': 1.2 };
+      const NAMES = { 'ray-m1': 'dragon pulse', 'ray-m2': 'hyper beam', 'lug-m1': 'aeroblast', 'lug-m2': 'hydro pump' };
+      const LOOPS = /^(idle|win)/;
+      const pool = new Map();
+      let active = false, epoch = 0, cur = null, z = 10, st = null, typeTimer = 0;
+
+      function get(name) {
+        let el = pool.get(name);
+        if (el) return el;
+        el = document.createElement('video');
+        el.className = 'hero-frame hero-vid bt-vid cut';
+        el.muted = true; el.playsInline = true; el.preload = 'auto';
+        el.setAttribute('muted', ''); el.setAttribute('playsinline', '');
+        el.ready = new Promise((res) => {
+          el.addEventListener('loadeddata', res, { once: true });
+          el.addEventListener('error', res, { once: true });
+        });
+        el.src = bsrc(name);
+        heroEl.appendChild(el);
+        pool.set(name, el);
+        return el;
+      }
+      const preload = (...names) => names.forEach(get);
+      function drop(el) {
+        if (!el || el === cur) return;
+        for (const [k, v] of pool) if (v === el) pool.delete(k);
+        el.pause(); el.removeAttribute('src'); el.load(); el.remove();
+      }
+      // fade: crossfade in (entering / leaving the battle); otherwise a
+      // hard cut, which is invisible because the frames line up
+      async function show(name, fade) {
+        const el = get(name), my = epoch;
+        await el.ready;
+        if (my !== epoch) return false;
+        el.loop = LOOPS.test(name);
+        try { el.currentTime = 0; } catch (e) {}
+        el.style.zIndex = String(++z);
+        el.classList.toggle('cut', !fade);
+        el.classList.add('on');
+        if (!paused) el.play().catch(() => {});
+        const prev = cur;
+        cur = el;
+        // the outgoing clip is under the new one: retire it once the new
+        // frame is surely on screen
+        if (prev && prev !== el) setTimeout(() => { if (prev !== cur) drop(prev); }, fade ? 700 : 120);
+        return true;
+      }
+      // resolves on the clip's last frame; a loop finishes its current pass
+      function ends(el) {
+        const my = epoch;
+        el.loop = false;
+        return new Promise((res) => {
+          (function poll() {
+            if (my !== epoch) return res(false);
+            if (el.ended || (el.duration && el.currentTime >= el.duration - 0.017)) return res(true);
+            requestAnimationFrame(poll);
+          })();
+        });
+      }
+      function at(el, t) {
+        const my = epoch;
+        return new Promise((res) => {
+          (function poll() {
+            if (my !== epoch) return res(false);
+            if (el.currentTime >= t || el.ended) return res(true);
+            requestAnimationFrame(poll);
+          })();
+        });
+      }
+
+      function say(text) {
+        clearInterval(typeTimer);
+        let i = 0;
+        textEl.textContent = '';
+        typeTimer = setInterval(() => {
+          textEl.textContent = text.slice(0, ++i);
+          if (i >= text.length) clearInterval(typeTimer);
+        }, 24);
+      }
+      function setHp(who, v, instant) {
+        const fill = $('bt-hp-' + who), num = $('bt-num-' + who);
+        if (instant) fill.style.transition = 'none';
+        fill.style.transform = `scaleX(${v / 100})`;
+        fill.classList.toggle('mid', v <= 50 && v > 20);
+        fill.classList.toggle('low', v <= 20);
+        if (instant) { fill.offsetWidth; fill.style.transition = ''; num.textContent = v; return; }
+        const from = +num.textContent, t0 = performance.now();
+        (function count(now) {
+          const k = Math.min(1, (now - t0) / 900);
+          num.textContent = Math.round(from + (v - from) * (1 - Math.pow(1 - k, 3)));
+          if (k < 1) requestAnimationFrame(count);
+        })(t0);
+      }
+      // 30-45 damage, 1 in 8 crits for 1.5x: a KO lands on the 2nd to 4th
+      // hit taken, so always within the baked stages (pk stage 3-5)
+      const roll = () => {
+        const crit = Math.random() < 0.125;
+        return { dmg: Math.round((30 + Math.random() * 15) * (crit ? 1.5 : 1)), crit };
+      };
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      function menu() {
+        preload(`ray-m1-s${st.stage}`, `ray-m2-s${st.stage}`);
+        say('what will rayquaza do?');
+        endEl.hidden = true;
+        movesEl.hidden = false;
+        movesEl.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      }
+
+      async function begin(fade) {
+        st = { ray: 100, lug: 100, stage: 0 };
+        setHp('ray', 100, true); setHp('lug', 100, true);
+        movesEl.hidden = true; endEl.hidden = true;
+        say('a wild lugia appeared!');
+        preload('intro-s0', 'idle-s0', 'ray-m1-s0', 'ray-m2-s0');
+        if (!await show('intro-s0', fade)) return;
+        if (!await ends(cur)) return;
+        if (!await show('idle-s0', false)) return;
+        menu();
+      }
+
+      async function start() {
+        if (active) return;
+        if (heroEl.classList.contains('mode-live')) setMode(false);
+        active = true; epoch++;
+        root.hidden = false;
+        requestAnimationFrame(() => root.classList.add('on'));
+        heroEl.classList.add('in-battle');
+        document.body.classList.add('in-battle');
+        battleMedia = (action) => {
+          if (!cur) return;
+          if (action === 'pause') cur.pause(); else cur.play().catch(() => {});
+        };
+        await begin(true);
+      }
+
+      function exit() {
+        if (!active) return;
+        active = false; epoch++;
+        clearInterval(typeTimer);
+        root.classList.remove('on');
+        heroEl.classList.remove('in-battle');
+        document.body.classList.remove('in-battle');
+        if (!paused) vid.play().catch(() => {});
+        const last = cur;
+        if (last) { last.classList.remove('cut'); last.classList.remove('on'); }
+        cur = null;
+        battleMedia = null;
+        setTimeout(() => {
+          if (active) return;
+          root.hidden = true;
+          [...pool.values()].forEach(drop);
+          if (last) drop(last);
+        }, 650);
+      }
+
+      async function turn(m) {
+        const my = epoch;
+        movesEl.hidden = true;
+        const s = st.stage, s1 = Math.min(5, s + 1);
+        const pm = `ray-m${m}`, atk = roll();
+        const lugLeft = Math.max(0, st.lug - atk.dmg);
+        let cpu = null, s2 = s1, rayLeft = st.ray;
+        if (lugLeft > 0) {
+          cpu = { move: Math.random() < 0.5 ? 'lug-m1' : 'lug-m2', ...roll() };
+          s2 = Math.min(5, s1 + 1);
+          rayLeft = Math.max(0, st.ray - cpu.dmg);
+        }
+        const unpicked = pool.get(`ray-m${3 - m}-s${s}`);
+        if (!cpu) preload(`${pm}-s${s}`, `lug-faint-s${s1}`, `win-ray-s${s1}`);
+        else preload(`${pm}-s${s}`, `${cpu.move}-s${s1}`,
+                     ...(rayLeft > 0 ? [`idle-s${s2}`] : [`ray-faint-s${s2}`, `win-lug-s${s2}`]));
+        say(`rayquaza used ${NAMES[pm]}!`);
+        if (!await ends(cur)) return;            // the idle hands off at its wrap
+        drop(unpicked);
+        if (!await show(`${pm}-s${s}`, false)) return;
+        if (!await at(cur, HIT[pm])) return;
+        st.lug = lugLeft; setHp('lug', lugLeft);
+        if (atk.crit) say('a critical hit!');
+        if (!await ends(cur)) return;
+        st.stage = s1;
+        if (!cpu) return ko('lug', s1, my);
+        say(`lugia used ${NAMES[cpu.move]}!`);
+        if (!await show(`${cpu.move}-s${s1}`, false)) return;
+        if (!await at(cur, HIT[cpu.move])) return;
+        st.ray = rayLeft; setHp('ray', rayLeft);
+        if (cpu.crit) say('a critical hit!');
+        if (!await ends(cur)) return;
+        st.stage = s2;
+        if (rayLeft <= 0) return ko('ray', s2, my);
+        if (!await show(`idle-s${s2}`, false)) return;
+        menu();
+      }
+
+      async function ko(who, s, my) {
+        const winner = who === 'lug' ? 'ray' : 'lug';
+        say(`${who === 'lug' ? 'lugia' : 'rayquaza'} fainted!`);
+        if (!await show(`${who}-faint-s${s}`, false)) return;
+        if (!await ends(cur)) return;
+        if (!await show(`win-${winner}-s${s}`, false)) return;
+        await wait(300);
+        if (my !== epoch) return;
+        say(winner === 'ray' ? 'you won! the pk did not.' : 'rayquaza is out of moves. so is the pk.');
+        endEl.hidden = false;
+      }
+
+      root.addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b || b.disabled || !active) return;
+        if (b.dataset.m) { movesEl.querySelectorAll('button').forEach((x) => { x.disabled = true; }); turn(+b.dataset.m); }
+        else if (b.dataset.act === 'run') { movesEl.hidden = true; epoch++; say('got away safely!'); setTimeout(exit, 1100); }
+        else if (b.dataset.act === 'exit') exit();
+        else if (b.dataset.act === 'rematch') { epoch++; begin(true); }
+      });
+
+      // ── triggers ──
+      const heroInView = () => heroEl.getBoundingClientRect().bottom > innerHeight * 0.5;
+      const KONAMI = ['arrowup', 'arrowup', 'arrowdown', 'arrowdown', 'arrowleft', 'arrowright', 'arrowleft', 'arrowright', 'b', 'a'];
+      let kpos = 0;
+      document.addEventListener('keydown', (e) => {
+        const k = (e.key || '').toLowerCase();
+        kpos = k === KONAMI[kpos] ? kpos + 1 : (k === KONAMI[0] ? 1 : 0);
+        if (kpos === KONAMI.length) {
+          kpos = 0;
+          if (active) return;
+          if (!heroInView()) window.scrollTo({ top: 0, behavior: 'smooth' });
+          start();
+        }
+      });
+      // 5 taps on the pk, each within 450ms of the last. The pk sits at
+      // the middle of the hero, a touch above center (scene PK_LIFT).
+      let taps = 0, lastTap = 0;
+      document.addEventListener('pointerdown', (e) => {
+        if (active || e.target.closest('button, a, nav, #hero-bar')) return;
+        const r = heroEl.getBoundingClientRect();
+        const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+        if (x < 0.3 || x > 0.7 || y < 0.28 || y > 0.6) { taps = 0; return; }
+        const now = performance.now();
+        taps = now - lastTap < 450 ? taps + 1 : 1;
+        lastTap = now;
+        if (taps >= 5) { taps = 0; start(); }
+      }, { passive: true });
+      window.__battle = { start, exit };   // console handle
+    })();
+
     function installHooks() {
       window.__heroVideoAction = (action) => {
         paused = action === 'pause';
         if (paused) vid.pause();
         else vid.play().catch(() => {});
+        if (battleMedia) battleMedia(action);
         // 'throttle' needs nothing: video decode is off-main-thread
       };
       // Nothing to toggle, but it MUST stay defined: forward() below tests

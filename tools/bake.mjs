@@ -17,6 +17,14 @@
    usage: node bake.mjs <job> [job...]    jobs: idle-land idle-port
                                                 flight-land gya-land
                                                 flight-port gya-port
+                                                battle-land battle-port
+   battle-<orient> films every clip of the easter-egg battle (scene
+   &battle=1) in ONE browser session into hero-video/battle/. All captures
+   run first, then the encodes (3 at a time): encoding alongside capture
+   starved the GPU loop of CPU and tripled ms/frame. Clips whose three
+   renditions already exist are skipped, and a leftover intermediate is
+   reused, so a stopped bake resumes. BATTLE=<name,name> limits it to some
+   clips (names as in battleClips() below, e.g. ray-m1-s0).
    env:   CHROME=<path>  use this Chromium instead of puppeteer's bundled one
           ANGLE=<backend> GL backend (default metal on macOS, swiftshader
                           elsewhere; capture is deterministic either way)
@@ -64,8 +72,8 @@ const JOBS = {
   'gya-port':    { w: 720,  h: 1280, touch: 1, mode: 'gya',    warm: 3, dur: 24, xf: 1.5 },
 };
 
-const run = (cmd, args) => new Promise((res, rej) => {
-  if (cmd === 'ffmpeg') args = ['-hide_banner', '-loglevel', 'warning', '-stats', ...args];
+const run = (cmd, args, quiet) => new Promise((res, rej) => {
+  if (cmd === 'ffmpeg') args = ['-hide_banner', '-loglevel', 'warning', ...(quiet ? [] : ['-stats']), ...args];
   const p = spawn(cmd, args, { stdio: ['ignore', 'inherit', 'inherit'] });
   p.on('exit', c => c === 0 ? res() : rej(new Error(cmd + ' exit ' + c)));
 });
@@ -181,7 +189,122 @@ async function assemble(name, j, inter) {
     `${OUTDIR}/${name}.webm`]);
 }
 
+/* ── battle ──────────────────────────────────────────────────────────
+   Every clip is a whole number of the scene's 2s idle period (BT_P) and
+   starts/ends on the shared idle phase, so the site can cut between any
+   two clips at the same pk stage with no crossfade. Loops (idle, win) are
+   exactly one period: no xfade assembly needed, the motion is periodic. */
+const BATTLE_DIR = join(OUTDIR, 'battle');
+function battleClips() {
+  const L = [{ name: 'intro-s0', clip: 'intro', stage: 0, dur: 4 }];
+  for (let s = 0; s <= 5; s++) L.push({ name: `idle-s${s}`, clip: 'idle', stage: s, dur: 2 });
+  for (let s = 0; s <= 5; s++) for (const m of ['ray-m1', 'ray-m2', 'lug-m1', 'lug-m2'])
+    L.push({ name: `${m}-s${s}`, clip: m, stage: s, dur: 4 });
+  for (let s = 3; s <= 5; s++) for (const w of ['ray', 'lug']) {
+    L.push({ name: `${w}-faint-s${s}`, clip: `${w}-faint`, stage: s, dur: 4 });
+    L.push({ name: `win-${w}-s${s}`, clip: `win-${w}`, stage: s, dur: 2 });
+  }
+  const only = process.env.BATTLE ? new Set(process.env.BATTLE.split(',')) : null;
+  return only ? L.filter(c => only.has(c.name)) : L;
+}
+
+async function encodeBattle(name, inter) {
+  const T = '3';
+  const o = `${BATTLE_DIR}/${name}`;
+  await run('ffmpeg', ['-y', '-i', inter, '-c:v', 'libx264', '-crf', '20', '-preset', 'slow', '-pix_fmt', 'yuv420p',
+    '-profile:v', 'high', '-threads', T, '-movflags', '+faststart', '-an', `${o}.mp4`], true);
+  await run('ffmpeg', ['-y', '-i', inter, '-c:v', 'libx265', '-crf', '23', '-preset', 'fast', '-pix_fmt', 'yuv420p10le',
+    '-tag:v', 'hvc1', '-x265-params', `aq-mode=3:pools=${T}:log-level=error`, '-movflags', '+faststart', '-an', `${o}.hevc.mp4`], true);
+  await run('ffmpeg', ['-y', '-i', inter, '-c:v', 'libvpx-vp9', '-crf', '34', '-b:v', '0', '-pix_fmt', 'yuv420p10le',
+    '-row-mt', '1', '-threads', T, '-deadline', 'good', '-cpu-used', '4', '-an', `${o}.webm`], true);
+  await rm(inter, { force: true });
+  console.log(`  ${name}: encoded`);
+}
+
+async function bakeBattle(orient) {
+  const touch = orient === 'port' ? 1 : 0;
+  const w = touch ? 720 : 1280, h = touch ? 1280 : 720;
+  await mkdir(SCRATCH, { recursive: true });
+  await mkdir(BATTLE_DIR, { recursive: true });
+  const browser = await puppeteer.launch({
+    headless: true,
+    executablePath: process.env.CHROME || undefined,
+    args: ['--enable-gpu', `--use-angle=${process.env.ANGLE || (process.platform === 'darwin' ? 'metal' : 'swiftshader')}`, '--enable-unsafe-swiftshader',
+      '--hide-scrollbars', '--mute-audio', '--no-sandbox', '--disable-dev-shm-usage',
+      '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding'],
+  });
+  const page = await browser.newPage();
+  await page.setViewport({ width: w, height: h, deviceScaleFactor: 2 });
+  page.on('pageerror', e => console.log('  [pageerror]', e.message));
+  await page.goto(`http://localhost:8080/rayquaza-flying-clean.html?capture=1&dpr=2&touch=${touch}&battle=1`,
+    { waitUntil: 'load', timeout: 120000 });
+  await page.waitForFunction('window.__heroReady === true && window.__battleReady === true', { timeout: 180000 });
+  await page.evaluate(() => { window.__capPause = true; });
+  const step = (t) => page.evaluate((tt) => new Promise((r) => {
+    window.__capT = tt;
+    window.__capPause = false;
+    (function poll() {
+      if (window.__mixerLastT === tt) { window.__capPause = true; return r(); }
+      requestAnimationFrame(poll);
+    })();
+  }), t);
+
+  const done = (name) => Promise.all(['.mp4', '.hevc.mp4', '.webm'].map(x => access(`${BATTLE_DIR}/${name}${x}`)))
+    .then(() => true, () => false);
+  const clips = battleClips();
+  const t0all = Date.now();
+  try {
+    for (const [ci, c] of clips.entries()) {
+      const name = `${c.name}-${orient}`;
+      const inter = `${SCRATCH}/${name}.inter.mp4`;
+      if (await done(name)) continue;
+      if (!TEST_S && await access(inter).then(() => true, () => false)) { toEncode.push([name, inter]); continue; }
+      await checkDisk(name);
+      const base = await page.evaluate((cl, st) => window.__capBattle({ clip: cl, stage: st }), c.clip, c.stage);
+      // the step before frame 0 lets textures and shaders settle
+      await step(base - 2 / FPS); await step(base - 1 / FPS);
+      const enc = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-c:v', 'png',
+        '-framerate', String(FPS), '-i', '-',
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '6', '-pix_fmt', 'yuv444p10le',
+        '-profile:v', 'high444', inter], { stdio: ['pipe', 'inherit', 'inherit'] });
+      const encDone = new Promise((res, rej) => enc.on('exit', x => x === 0 ? res() : rej(new Error('ffmpeg intermediate exit ' + x))));
+      const write = (buf) => new Promise((res) => { if (enc.stdin.write(buf)) res(); else enc.stdin.once('drain', res); });
+      const N = Math.round((TEST_S || c.dur) * FPS);
+      const t0 = Date.now();
+      for (let i = 0; i < N; i++) {
+        await step(base + i / FPS);
+        await write(await page.screenshot({ type: 'png', optimizeForSpeed: true }));
+      }
+      enc.stdin.end();
+      await encDone;
+      console.log(`  [${ci + 1}/${clips.length}] ${name}: ${N} frames, ${((Date.now() - t0) / N).toFixed(0)} ms/frame, ${((Date.now() - t0all) / 60000).toFixed(1)}m total`);
+      if (TEST_S) { console.log(`TEST capture kept at ${inter}`); continue; }
+      toEncode.push([name, inter]);
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
+const toEncode = [];
+async function encodeAll() {
+  const t0 = Date.now(); let n = 0;
+  const worker = async () => {
+    for (let job; (job = toEncode.shift());) {
+      await encodeBattle(...job);
+      console.log(`  encoded ${++n} (${((Date.now() - t0) / 60000).toFixed(1)}m)`);
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+}
+
 for (const name of process.argv.slice(2)) {
+  if (name === 'battle-land' || name === 'battle-port') {
+    console.log(`== ${name} ==`);
+    await bakeBattle(name.slice(7));
+    continue;
+  }
   const j = JOBS[name];
   if (!j) { console.log('unknown job', name); continue; }
   console.log(`== ${name} ==`);
@@ -194,4 +317,5 @@ for (const name of process.argv.slice(2)) {
   await assemble(name, j, inter);
   await rm(inter, { force: true });   // intermediates are big; free per job
 }
+if (toEncode.length && !TEST_S) { console.log(`== encoding ${toEncode.length} battle clips ==`); await encodeAll(); }
 console.log('ALL JOBS DONE');
