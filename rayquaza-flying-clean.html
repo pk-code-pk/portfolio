@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <!-- kick off the heavy same-origin fetches before script parse -->
   <link rel="modulepreload" href="vendor/three.bundle.min.js?v=5">
-  <link rel="preload" href="rayquaza/rayquaza.glb" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="https://pub-52095d8d2d4e49ae91b1096797737410.r2.dev/m1/rayquaza/rayquaza.glb" as="fetch" crossorigin="anonymous">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
@@ -142,7 +142,7 @@
      muted + unused), so preload="auto" was downloading the multi-MB track a
      second time on every page load. Standalone playback still works — play()
      triggers the fetch. -->
-<audio id="bg-audio" src="music/bg-music.mp3" loop preload="none"></audio>
+<audio id="bg-audio" src="https://pub-52095d8d2d4e49ae91b1096797737410.r2.dev/m1/music/bg-music.mp3" loop preload="none"></audio>
 
   <!-- music player: play toggle + elastic volume slider -->
   <div id="music-player">
@@ -1741,7 +1741,7 @@
       });
     }
 
-    new GLTFLoader().load('rayquaza/rayquaza.glb',
+    new GLTFLoader().load('https://pub-52095d8d2d4e49ae91b1096797737410.r2.dev/m1/rayquaza/rayquaza.glb',
       (gltf) => {
         model = gltf.scene;
 
@@ -2109,7 +2109,7 @@
     function loadGreninja() {
       return new Promise((resolve, reject) => {
         if (greninjaModel) { resolve(greninjaModel); return; }
-        new GLTFLoader().load('pokemon/gyarados_rigged.glb',
+        new GLTFLoader().load('https://pub-52095d8d2d4e49ae91b1096797737410.r2.dev/m1/pokemon/gyarados_rigged.glb',
           (gltf) => {
             const g = gltf.scene;
 
@@ -3234,7 +3234,7 @@
       const lugPivot = new THREE.Group();
       scene.add(lugPivot);
       const clipLen = {};
-      new GLTFLoader().load('pokemon/lugia.glb', (gltf) => {
+      new GLTFLoader().load('https://pub-52095d8d2d4e49ae91b1096797737410.r2.dev/m1/pokemon/lugia.glb', (gltf) => {
         lug = gltf.scene;
         lug.traverse(o => {
           if (o.isMesh || o.isSkinnedMesh) {

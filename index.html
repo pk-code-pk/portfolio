@@ -622,7 +622,7 @@
     .hero > .hero-bg {
       position: absolute;
       inset: 0;
-      background: url('hero-bg-final.jpg') center center / cover no-repeat;
+      background: url('https://pub-52095d8d2d4e49ae91b1096797737410.r2.dev/m1/hero-bg-final.jpg') center center / cover no-repeat;
       z-index: 0;
       pointer-events: none;
       animation: bg-breathe 9s ease-in-out infinite;
@@ -3732,7 +3732,10 @@
       probe.canPlayType('video/webm; codecs="vp09.00.41.10"')    ? '.webm' :
       '.mp4';
     const ORIENT = innerHeight > innerWidth ? 'port' : 'land';
-    const src = (clip) => `hero-video/${clip}-${ORIENT}${EXT}`;
+    // hero clips, music and big media stream from Cloudflare R2 (free
+    // egress) so traffic spikes don't burn Vercel's bandwidth cap
+    const MEDIA = 'https://pub-52095d8d2d4e49ae91b1096797737410.r2.dev/m1/';
+    const src = (clip) => `${MEDIA}hero-video/${clip}-${ORIENT}${EXT}`;
     let paused = false;
 
     // every clip's first 1.5s is the baked loop crossfade — its own tail
@@ -3853,7 +3856,7 @@
               load('ray', `sfx/rayquaza-cry.${fmt}`);
               load('lug', 'sfx/lugia-cry.mp3');
               try {
-                bgm = new Audio(`sfx/battle-theme.${fmt}`);
+                bgm = new Audio(`https://pub-52095d8d2d4e49ae91b1096797737410.r2.dev/m1/sfx/battle-theme.${fmt}`);
                 bgm.loop = true; bgm.preload = 'auto';
                 ctx.createMediaElementSource(bgm).connect(musicBus);
               } catch (e) { bgm = null; }
