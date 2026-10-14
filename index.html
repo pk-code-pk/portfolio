@@ -1248,7 +1248,9 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      background: linear-gradient(to bottom, rgba(8,8,8,0.96) 0%, rgba(8,8,8,0.55) 70%, transparent 100%);
+      /* solid behind the label, then a short fade, so scrolled text never
+         shows through the button itself */
+      background: linear-gradient(to bottom, var(--bg) 0%, var(--bg) 62%, rgba(8,8,8,0.7) 82%, transparent 100%);
       color: var(--fg);
       font-family: 'Hanken Grotesk', sans-serif;
       font-size: .78rem;
@@ -1267,13 +1269,16 @@
       transition: transform var(--t-standard) var(--ease-out);
     }
 
-    .case-back {
-      transition: opacity var(--t-standard) var(--ease-out);
+    /* fade the label, never the bar: its backdrop must stay opaque. And
+       only on real hover, since a tap leaves :hover stuck on touch. */
+    .case-back-glyph, .case-back-text {
+      transition: opacity var(--t-standard) var(--ease-out), transform var(--t-standard) var(--ease-out);
     }
-    .case-back:hover .case-back-glyph {
-      transform: translate(-4px, 4px);
+    @media (hover: hover) {
+      .case-back:hover .case-back-glyph { transform: translate(-4px, 4px); }
+      .case-back:hover .case-back-glyph,
+      .case-back:hover .case-back-text { opacity: 0.75; }
     }
-    .case-back:hover { opacity: 0.75; }
 
     .case-grid {
       display: grid;
@@ -1917,7 +1922,9 @@
          already do this via the existing 920px rule; keep it explicit here
          so nothing slips through). */
       .case-media { gap: 14px; }
-      .case-back  { top: 14px; left: 14px; }
+      /* stay pinned at the very top (a sticky top/left offset leaves a
+         gap the text scrolls through); tighten with padding instead */
+      .case-back  { padding: calc(14px + env(safe-area-inset-top, 0px)) var(--pad) 22px; }
     }
 
     @media (max-width: 640px) {
