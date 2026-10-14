@@ -3050,6 +3050,10 @@
     // stash for the reveal sequence
     caseEl._titleChars = caseTitleChars;
 
+    // a running hero battle (overlay, hp bars, music) must not outlive
+    // the page it sits on
+    try { window.__battle && window.__battle.exit(); } catch (e) {}
+
     caseEl.classList.add('is-open');
     caseEl.setAttribute('aria-hidden', 'false');
     document.documentElement.classList.add('case-open');
